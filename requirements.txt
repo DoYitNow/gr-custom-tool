@@ -1,0 +1,3 @@
+# CPython 3.12, 64-bit. Demo crop graphics, shutdown images and native ARM execution.
+Pillow==12.3.0
+unicorn==2.1.4
