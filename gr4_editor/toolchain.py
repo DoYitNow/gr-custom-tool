@@ -44,7 +44,8 @@ def _executable(value, name):
         path = path / (name + ('.exe' if os.name == 'nt' else ''))
     if not path.is_file():
         raise ValueError('找不到工具链程序：' + str(path))
-    return path.resolve()
+    # LLD selects its driver from the executable name; retain ld.lld symlinks.
+    return path.parent.resolve() / path.name
 
 
 def _homebrew_bins():
@@ -84,7 +85,7 @@ def _companion(clang, name):
     choices.extend(directory / (name + suffix) for directory in _homebrew_bins())
     for path in choices:
         if path.is_file():
-            return path.resolve()
+            return path.parent.resolve() / path.name
     raise ValueError('工具链缺少 ' + name + '；请安装完整 LLVM/LLD 或 Android NDK')
 
 

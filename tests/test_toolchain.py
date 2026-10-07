@@ -68,6 +68,23 @@ class ToolchainSelectionTests(unittest.TestCase):
         with patch.object(llvm, '_homebrew_bins', return_value=[homebrew]), patch.object(llvm.shutil, 'which', return_value=None):
             self.assertEqual(llvm._find(self.root, clang=self.tools[0])[3], linker)
 
+    @unittest.skipIf(os.name == 'nt', 'symlink creation may require Windows privileges')
+    def test_ld_lld_symlink_name_survives_selection_and_saved_configuration(self):
+        linker = self.tools[3]
+        generic = linker.with_name('lld')
+        linker.rename(generic)
+        linker.symlink_to(generic.name)
+        with patch.object(llvm.shutil, 'which', return_value=None):
+            for selected in (None, linker, self.bin):
+                with self.subTest(linker=selected):
+                    self.assertEqual(llvm._find(self.root, clang=self.tools[0], lld=selected)[3], linker)
+        with patch.object(llvm, '_preflight', return_value={'probe_bytes': 12}) as probe:
+            llvm.save_config(self.root, self.tools[0], linker)
+        self.assertEqual(probe.call_args.args[0][3], linker)
+        config = json.loads((self.root / 'toolchain.json').read_text(encoding='utf-8'))
+        self.assertEqual(config['lld'], str(linker))
+        self.assertEqual(llvm.linker_flags(self.tools[0]), ['--ld-path=' + str(linker)])
+
     def test_missing_optional_toolchain_is_reported_without_data_writes(self):
         with patch.object(llvm, '_candidates', return_value=iter(())):
             result = llvm.status(self.root)
