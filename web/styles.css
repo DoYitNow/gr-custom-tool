@@ -192,6 +192,14 @@ a:hover { color: #62676b; }
 .badge.warning { background: var(--warn-soft); color: var(--warn); }
 .status-inline { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 12px; color: #707477; font-size: 11px; font-weight: 400; }
 .edit-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 20px; border-top: 1px solid var(--line); }
+.toggle { display: flex; align-items: center; gap: 9px; color: #656b6f; font-size: 11px; cursor: pointer; }
+.toggle input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.toggle-track { width: 27px; height: 15px; flex-shrink: 0; position: relative; border-radius: 9px; background: #c8cbcd; transition: background .12s; }
+.toggle-track::before { content: ""; position: absolute; left: 2px; top: 2px; width: 11px; height: 11px; border-radius: 50%; background: #fff; transition: transform .12s; }
+.toggle input:checked + .toggle-track { background: #464b4f; }
+.toggle input:checked + .toggle-track::before { transform: translateX(12px); }
+.toggle input:focus-visible + .toggle-track { outline: 2px solid #5b6064; outline-offset: 3px; }
+.toggle input:disabled + .toggle-track { opacity: .45; }
 .reorder { display: flex; gap: 6px; }
 
 .project-sidebar { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
@@ -335,6 +343,7 @@ a:hover { color: #62676b; }
 .build-controls { display: flex; flex-direction: column; align-items: stretch; gap: 18px; }
 .build-version-field { width: 100%; min-width: 0; }
 .build-actions { display: flex; flex-direction: column; align-items: stretch; gap: 14px; }
+.build-option { justify-content: flex-start; }
 .build-actions .save-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0; }
 .build-actions .save-row .muted { white-space: nowrap; }
 .build-result { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }

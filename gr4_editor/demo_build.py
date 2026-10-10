@@ -154,6 +154,65 @@ def canonical_base(source):
 _canonical_source = canonical_base
 
 
+def prepare_update_policy(rtos, allow_older=True):
+    """Apply or remove the reviewed RTOS version gate before packaging.
+
+    Official input has no editor footer, so the transform operates directly
+    on its RTOS bytes.  Demo candidates carry a recovery footer; in that case
+    transform only the body and refresh the footer proof so the canonical
+    official input remains recoverable.
+    """
+    if type(allow_older) is not bool:
+        raise ValueError("低版本固件支持开关必须是布尔值")
+    from .update_policy import apply_update_policy, inspect_update_policy, remove_update_policy
+
+    source = bytes(rtos)
+    try:
+        metadata = read_registry(source)
+    except ValueError:
+        # An otherwise valid firmware may carry a registry footer from the
+        # research editor or another producer.  It remains a generic input;
+        # the policy transform itself does not depend on that footer schema.
+        metadata = None
+    transform = apply_update_policy if allow_older else remove_update_policy
+    if metadata is None:
+        return transform(source)
+
+    if metadata.get("demo_read_only"):
+        try:
+            footer_size = 16 + struct.unpack_from("<I", source, len(source) - 8)[0]
+            if footer_size > len(source):
+                raise ValueError("编辑器恢复记录尾部无效")
+            body, proof = transform(source[:-footer_size])
+        except struct.error as exc:
+            raise ValueError("编辑器恢复记录尾部无效") from exc
+        policy = inspect_update_policy(body)
+        if body == source[:-footer_size] and metadata.get("update_policy") == policy:
+            return source, proof
+        foreign = {key: value for key, value in metadata.items() if key != "demo_read_only"}
+        foreign["update_policy"] = policy
+        output = _finish_registry(bytearray(body), foreign, source[-16:-8], minimum_size=len(source))
+        return output, proof
+
+    base = canonical_base(source)
+    try:
+        footer_size = 16 + struct.unpack_from("<I", source, len(source) - 8)[0]
+    except struct.error as exc:
+        raise ValueError("编辑器恢复记录尾部无效") from exc
+    if footer_size > len(source):
+        raise ValueError("编辑器恢复记录尾部无效")
+    body, proof = transform(source[:-footer_size])
+    policy = inspect_update_policy(body)
+    if body == source[:-footer_size] and metadata.get("update_policy") == policy:
+        return source, proof
+    metadata = {**metadata, "update_policy": policy,
+                "compiler_base_restore": _canonical_restore(base, body)}
+    output = _finish(bytearray(body), metadata, minimum_size=len(source))
+    if canonical_base(output) != base:
+        raise ValueError("版本策略修改后无法恢复编译基线")
+    return output, proof
+
+
 def supports_image(rtos):
     try:
         canonical_base(rtos)
@@ -184,6 +243,23 @@ def _finish(image, metadata, minimum_size=0):
     encoded = json.dumps(metadata, separators=(",", ":"), ensure_ascii=True).encode("ascii")
     encoded += b" " * ((-len(encoded)) % 4)
     image.extend(encoded + FOOTER_MAGIC + struct.pack("<I", len(encoded)) + bytes(4))
+    total = sum(struct.unpack("<%dI" % (len(image) // 4), image))
+    struct.pack_into("<I", image, len(image) - 4, (-total) & 0xFFFFFFFF)
+    return bytes(image)
+
+
+def _finish_registry(image, metadata, magic, minimum_size=0):
+    """Refresh a foreign recovery footer without changing its producer tag."""
+    image = bytearray(image)
+    image.extend(bytes((-len(image)) % 4))
+    preview = json.dumps(metadata, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    footer_size = ((len(preview) + 3) & ~3) + 16
+    required = max(len(image), minimum_size - footer_size)
+    image.extend(bytes(max(0, ((required + 3) & ~3) - len(image))))
+    metadata = {**metadata, "body_sha256": _body_sha(image)}
+    encoded = json.dumps(metadata, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    encoded += b" " * ((-len(encoded)) % 4)
+    image.extend(encoded + bytes(magic) + struct.pack("<I", len(encoded)) + bytes(4))
     total = sum(struct.unpack("<%dI" % (len(image) // 4), image))
     struct.pack_into("<I", image, len(image) - 4, (-total) & 0xFFFFFFFF)
     return bytes(image)

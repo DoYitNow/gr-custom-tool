@@ -100,11 +100,14 @@ def make_handler(editor):
                 data = json.loads(raw)
                 if path == "/api/project":
                     result = editor.save(data["project_id"], data.get("title"), crops=data.get("crops"),
-                                         shutdown=data.get("shutdown"))
+                                         shutdown=data.get("shutdown"),
+                                         update_policy_draft=data.get("update_policy_draft"),
+                                         build_options=data.get("build_options"))
                 elif path == "/api/history/open":
                     result = editor.open_history_firmware(data['sha256'])
                 elif path == "/api/history/rollback":
-                    result = editor.rollback_history_firmware(data['sha256'], data['project_id'], data.get('version') or None)
+                    result = editor.rollback_history_firmware(data['sha256'], data['project_id'], data.get('version') or None,
+                                                             data.get('allow_older', True))
                 elif path == "/api/shutdown-item":
                     result = editor.add_shutdown_item(data.get('project_id') or query['project_id'], data.get('name'),
                                                      data.get('source_id'), data.get('asset_id'))
@@ -113,7 +116,8 @@ def make_handler(editor):
                 elif path == "/api/project-import":
                     result = editor.import_project(data)
                 elif path == "/api/build":
-                    result = editor.build(data["project_id"], data.get("version") or None)
+                    result = editor.build(data["project_id"], data.get("version") or None,
+                                          data.get("allow_older"))
                 elif path == "/api/toolchain":
                     from .toolchain import save_config
                     result = save_config(editor.store.root, data["clang"], data.get("lld") or None)

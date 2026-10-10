@@ -4,7 +4,7 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const state = { history: null, rollback: null, project: null, selectedCrop: null, page: "crops", selectedShutdown: null, shutdownDialogMode: "add", shutdownDialogFile: null, dirty: false, busy: false, status: null, settings: null };
+const state = { history: null, rollback: null, project: null, selectedCrop: null, page: "crops", selectedShutdown: null, shutdownDialogMode: "add", shutdownDialogFile: null, dirty: false, busy: false, status: null, settings: null, allowOlder: true };
 const selectedCrop = () => state.project?.crops?.find((row) => row.id === state.selectedCrop);
 const shutdownDraft = () => state.project?.shutdown;
 const selectedShutdown = () => shutdownDraft()?.items?.find((row) => row.id === state.selectedShutdown);
@@ -46,6 +46,11 @@ function switchView(view) {
 function openSupport() { $("more-menu").open = false; $("support-dialog").showModal(); }
 function showBuildResult(target, result, label = "已生成") {
   target.replaceChildren(element("strong", `${label} ${result.version}`));
+  const updatePolicy = result.report?.package?.update_policy;
+  if (updatePolicy?.status === "verified") {
+    const enabled = updatePolicy.installed === true && updatePolicy.policy === "allow_older";
+    target.append(element("p", "低版本支持：" + (enabled ? "已开启" : "已关闭"), "field-help"));
+  }
   for (const [text, href] of [["下载固件", result.download_url], ["构建清单", result.manifest_url]]) if (href) { const link = element("a", text, "button small secondary"); link.href = href; target.append(link); }
   const support = element("div", undefined, "export-support");
   support.append(element("p", "本项目完全免费，如果你在其他地方收费获取了该项目，请退款并联系原作者。", "field-help"));
@@ -137,6 +142,7 @@ function acceptProject(project) {
   project.shutdown ||= { schema_version: 2, assets: [], items: [], selected_item_id: null };
   project.shutdown.assets ||= [];
   project.shutdown.items ||= [];
+  state.allowOlder = project.build_options?.allow_older !== false;
   if (!project.shutdown.items.some(row => row.id === state.selectedShutdown)) state.selectedShutdown = null;
   state.project = project;
   rememberDraft(project.id);
@@ -156,6 +162,7 @@ async function saveDraft() {
   acceptProject(await request("/api/project", {
     project_id: state.project.id, title: $("project-title").value,
     crops: state.project.crops, shutdown: state.project.shutdown,
+    build_options: { allow_older: $("allow-older").checked },
   }));
 }
 async function refreshStatus() {
@@ -383,15 +390,18 @@ function renderPage() {
 }
 function renderBuildAvailability() {
   if (!state.project) return;
-  const toolchainMissing = state.settings?.toolchain?.ready !== true;
+  const featureBackend = state.project.capabilities?.feature_backend_verified !== false;
+  const toolchainMissing = featureBackend && state.settings?.toolchain?.ready !== true;
   const cropsUnconfirmed = unconfirmedCrops();
   const cropsPending = cropsUnconfirmed || state.project.crops.some(row => cropEditable(row) && (!row.geometry || cropPreviews.get(row.id)?.pending || cropPreviews.get(row.id)?.error));
   const cropFields = rows => rows.map(({ id, name, requested_ratio, identity }) => ({ id, name, requested_ratio, identity }));
   const cropsChanged = JSON.stringify(cropFields(state.project.crops)) !== JSON.stringify(cropFields(state.project.original_crops));
   const cropsBlocked = cropsChanged && !state.project.crop_capabilities?.can_write;
   const menu = shutdownMenuStatus(); const menuBlocked = menu.enabled && !menu.ready;
+  $("allow-older").checked = state.allowOlder;
+  $("allow-older").disabled = !state.project.can_generate;
   $("build-firmware").disabled = !state.project.can_generate || toolchainMissing || cropsPending || cropsBlocked || menuBlocked;
-  $("build-note").textContent = uiText(!state.project.can_generate ? "当前固件只读" : toolchainMissing ? "请在更多 → 生成设置中配置工具路径" : cropsUnconfirmed ? "请先确认裁切比例" : cropsPending ? "请完成裁切比例" : cropsBlocked ? "当前固件不支持修改裁切比例" : menuBlocked ? menu.reason : "");
+  $("build-note").textContent = uiText(!state.project.can_generate ? "当前固件无法重包" : toolchainMissing ? "请在更多 → 生成设置中配置工具路径" : cropsUnconfirmed ? "请先确认裁切比例" : cropsPending ? "请完成裁切比例" : cropsBlocked ? "当前固件不支持修改裁切比例" : menuBlocked ? menu.reason : "");
   $("build-note").hidden = !$("build-note").textContent;
 }
 async function previewCrop(row) {
@@ -543,7 +553,7 @@ $("rollback-form").onsubmit = async (event) => {
   return operation("生成回退固件并检查…", async () => {
     if (!state.project || !state.rollback) throw new Error("请先载入当前固件");
     await saveDraft();
-    const result = await request("/api/history/rollback", { sha256: state.rollback.sha256, project_id: state.project.id, version: $("rollback-version").value.trim() });
+    const result = await request("/api/history/rollback", { sha256: state.rollback.sha256, project_id: state.project.id, version: $("rollback-version").value.trim(), allow_older: $("allow-older").checked });
     $("rollback-dialog").close(); $("history-detail-dialog").close();
     const current = await request("/api/project?id=" + encodeURIComponent(state.project.id));
     state.project.suggested_version = current.suggested_version;
@@ -665,6 +675,11 @@ for (const [id, delta] of [["crop-move-up", -1], ["crop-move-down", 1]]) $(id).o
 };
 $("project-title").oninput = dirty;
 $("save-project").onclick = () => operation("保存修改…", async () => { await saveDraft(); await refreshStatus(); notice("修改已保存"); });
+$("allow-older").onchange = () => {
+  state.allowOlder = $("allow-older").checked;
+  dirty(); renderBuildAvailability();
+  if (state.allowOlder) $("allow-older-warning-dialog").showModal();
+};
 $("export-project").onclick = async () => {
   if (!await requireRiskAcknowledgement("backup")) return;
   return operation("导出编辑备份…", async () => { await saveDraft(); window.location.href = "/api/export?id=" + state.project.id; });
@@ -686,7 +701,7 @@ $("build-firmware").onclick = async () => {
   return operation("生成固件…", async () => {
     renderBuildAvailability(); if ($("build-firmware").disabled) throw new Error($("build-note").textContent);
     const version = $("build-version").value.trim(); await saveDraft();
-    const result = await request("/api/build", { project_id: state.project.id, version });
+    const result = await request("/api/build", { project_id: state.project.id, version, allow_older: $("allow-older").checked });
     acceptProject(await request("/api/project?id=" + state.project.id)); await refreshStatus();
     showBuildResult($("build-result"), result); notice("固件已生成");
     if (state.history) await refreshHistory();

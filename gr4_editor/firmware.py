@@ -19,6 +19,7 @@ from .codec.frames import (
     framed_container, section_rows, _aligned_target,
 )
 from .codec.container import inspect_container, repair_last_word, sum32
+from .update_policy import inspect_update_policy
 
 BASE = 0x53000000
 VERSION_RUNTIME = 0x53FE50F8
@@ -95,9 +96,12 @@ class FirmwareImage:
     @property
     def editability(self) -> dict:
         if self.editable:
-            reason = ('Verified demo metadata and firmware container' if
-                      self.layout_proof.get('editor_registry_verified') else
-                      'Verified backend RTOS and supported layout')
+            if self.layout_proof.get('generic_passthrough'):
+                reason = 'Verified firmware container; feature layout is not registered, so generation preserves imported resources'
+            elif self.layout_proof.get('editor_registry_verified'):
+                reason = 'Verified demo metadata and firmware container'
+            else:
+                reason = 'Verified backend RTOS and supported layout'
         elif self.history and self.history.get('kind') == 'official':
             reason = 'Official firmware: inspection only'
         else:
@@ -220,11 +224,13 @@ def _load_bytes(candidate: bytes, path: Path | None = None) -> FirmwareImage:
                 registry_metadata = demo_build._metadata(rtos)
         except (ImportError, AttributeError, ValueError, TypeError, struct.error):
             backend_verified = False
-        editable = backend_verified
-        if backend_verified and _sha(rtos) == demo_build.OFFICIAL7_SHA:
-            # First-use initialization is limited to the exact supplied
-            # official container, including its other components/resources.
-            editable = identity is not None and identity.get('kind') == 'official'
+        # A structurally valid GR4 container is always importable and can be
+        # re-packed while preserving its unregistered resources.  The feature
+        # compiler still uses ``backend_source_verified`` below to decide
+        # whether crop/end-screen writes are available.  Keeping those two
+        # capabilities separate avoids turning an unknown layout into a
+        # falsely verified native patch target.
+        editable = True
         proof = {
             'container_checksum_valid': True, 'decoded_checksum_valid': True,
             'component_checksums_valid': True, 'component_versions_consistent': True,
@@ -238,6 +244,8 @@ def _load_bytes(candidate: bytes, path: Path | None = None) -> FirmwareImage:
             'compiler_base_rtos_sha256': ((registry_metadata.get('compiler_base_sha256', registry_metadata.get('base_rtos_sha256'))
                                           if registry_metadata else _sha(rtos)) if backend_verified else None),
             'hardware_flash_verified': False,
+            'generic_passthrough': not backend_verified,
+            'update_policy': inspect_update_policy(rtos),
         }
         return FirmwareImage(path, candidate, decoded, rtos, icon_bytes, sections, info,
                              version, digest, identity, editable, proof)
@@ -263,6 +271,7 @@ def inspect_firmware(path: str | Path | FirmwareImage) -> dict:
         'history': image.history, 'known_stage_id': image.known_stage_id,
         'editable': image.editable, 'editability': image.editability,
         'sections': image.sections, 'layout_proof': image.layout_proof,
+        'update_policy': inspect_update_policy(image.rtos),
         'camera_values_available': False,
     }
 
@@ -456,7 +465,8 @@ def _outer_version(candidate: bytes, new: int) -> bytes:
 
 
 def repack_image(image: FirmwareImage, new_rtos: bytes, new_icon_bytes: bytes | None = None,
-                 new_version=None, new_res_section: bytes | None = None) -> tuple[bytes, dict]:
+                 new_version=None, new_res_section: bytes | None = None,
+                 allow_older=True) -> tuple[bytes, dict]:
     """Return candidate bytes/report; never write a file, camera or card.
 
     ``new_icon_bytes`` is the full ICONBIN payload, including existing pixels.
@@ -473,7 +483,11 @@ def repack_image(image: FirmwareImage, new_rtos: bytes, new_icon_bytes: bytes | 
         raise FirmwareError('this adapter only rebuilds the 1.11.10.x family')
     if new < old:
         raise FirmwareError('output version cannot be lower than imported firmware')
-    target_rtos = _patch_rtos_version(bytes(new_rtos), old, new)
+    if type(allow_older) is not bool:
+        raise ValueError('低版本固件支持开关必须是布尔值')
+    from .demo_build import prepare_update_policy
+    policy_rtos, policy_installation = prepare_update_policy(new_rtos, allow_older=allow_older)
+    target_rtos = _patch_rtos_version(policy_rtos, old, new)
     if len(target_rtos) < len(image.rtos) or len(target_rtos) % 4:
         raise FirmwareError('RTOS replacement must be word aligned and cannot shrink')
     icons = image.icon_bytes if new_icon_bytes is None else bytes(new_icon_bytes)
@@ -508,6 +522,11 @@ def repack_image(image: FirmwareImage, new_rtos: bytes, new_icon_bytes: bytes | 
     payload, feature_report = _repack_frames(transient.candidate, transient.decoded, target, growth, resource_changes=new_res_section is not None)
     candidate = framed_container(transient.candidate, payload, target)
     verified = _load_bytes(candidate)
+    policy = inspect_update_policy(verified.rtos)
+    if allow_older and not policy.get('installed'):
+        raise FirmwareError('rebuilt firmware is missing the verified update policy')
+    if not allow_older and (policy.get('status') != 'verified' or policy.get('policy') != 'factory'):
+        raise FirmwareError('rebuilt firmware did not restore the factory update policy')
     if verified.decoded != target or verified.rtos != target_rtos or verified.icon_bytes != icons:
         raise FirmwareError('rebuilt import does not equal requested resources')
     allowed = {'RTOS', 'ICONBIN'} | ({'RES'} if new_res_section is not None else set()) | ({'SRIC', 'CPU'} if old != new else set())
@@ -527,6 +546,8 @@ def repack_image(image: FirmwareImage, new_rtos: bytes, new_icon_bytes: bytes | 
         'iconbin_added_bytes': len(icons) - len(image.icon_bytes),
         'preserved_sections': preserved, 'version_repack': version_report,
         'feature_repack': feature_report, 'layout_proof': verified.layout_proof,
+        'update_policy': policy, 'update_policy_requested': allow_older,
+        'update_policy_installation': policy_installation,
         'fresh_history_roundtrip_exact': True, 'hardware_flash_verified': False,
         'requires_local_state_manifest_for_future_editing': not bool(
             verified.layout_proof.get('editor_registry_verified') and

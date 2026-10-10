@@ -105,31 +105,31 @@ def open_firmware(editor, digest):
         return editor.import_firmware(path.read_bytes(), entry["filename"] if entry else path.name)
 
 
-def _verify_program(source, restored):
-    """Permit exactly the container's established component version locations."""
+def _verify_program(source, restored, source_rtos=None, allow_older=None):
+    """Verify original content plus declared versions and update policy."""
     from .firmware import _patch_rtos_version, repair_last_word
-    from .demo_build import canonical_base, _metadata
+    from .demo_build import prepare_update_policy
+    from .update_policy import inspect_update_policy
+    if source_rtos is None:
+        source_rtos = source.rtos
+    restored_policy = inspect_update_policy(restored.rtos)
+    if allow_older is None:
+        if restored_policy.get("status") != "verified":
+            raise ValueError("恢复固件的低版本策略无法识别")
+        allow_older = bool(restored_policy.get("installed"))
     old, new = version_word(source.version), version_word(restored.version)
     if [row["name"] for row in source.sections] != [row["name"] for row in restored.sections]:
         raise ValueError("恢复固件改变了节布局")
     preserved, changed = [], []
-    appended_metadata = False
+    policy_rtos, _ = prepare_update_policy(source_rtos, allow_older=allow_older)
     for before, after in zip(source.sections, restored.sections):
         name = before["name"]
         original = source.decoded[before["start"]:before["end"]]
         actual = restored.decoded[after["start"]:after["end"]]
         expected = bytearray(original)
         if name == "RTOS":
-            expected[16:] = _patch_rtos_version(bytes(expected[16:]), old, new)
-            if len(actual) > len(expected):
-                if (_metadata(source.rtos) is not None or _metadata(restored.rtos) is None
-                        or canonical_base(restored.rtos) != source.rtos
-                        or actual[:12] != expected[:12]
-                        or actual[16:len(expected)] != expected[16:]):
-                    raise ValueError("原版回退候选出现程序修改")
-                appended_metadata = True
-                changed.append(name)
-                continue
+            expected[16:] = _patch_rtos_version(policy_rtos, old, new)
+            struct.pack_into("<I", expected, 12, len(expected) - 16)
         elif name == "SRIC":
             struct.pack_into("<I", expected, 16 + 0x83D4, new)
             expected[16:] = repair_last_word(expected[16:])
@@ -139,18 +139,24 @@ def _verify_program(source, restored):
             checksum = (-sum(value[0] for value in struct.iter_unpack(">I", expected[16:]))) & 0xFFFFFFFF
             struct.pack_into(">I", expected, 16 + 0x7C, checksum)
         if bytes(expected) != actual:
-            raise ValueError("恢复固件出现版本字段以外的修改：" + name)
+            raise ValueError("恢复固件出现版本、校验和与声明的更新策略以外的修改：" + name)
         (changed if original != actual else preserved).append(name)
     if source.icon_bytes != restored.icon_bytes:
         raise ValueError("恢复固件改变了 ICONBIN 像素")
-    return {"status": "passed", "only_version_and_checksums_changed": not appended_metadata,
-            "demo_recovery_metadata_appended": appended_metadata,
-            "original_program_preserved": True,
+    policy = restored_policy
+    if policy.get("status") != "verified" or policy.get("installed") is not allow_older:
+        raise ValueError("恢复固件的低版本策略读回不一致")
+    return {"status": "passed", "only_version_and_checksums_changed": policy_rtos == source.rtos,
+            "demo_recovery_metadata_appended": len(source_rtos) > len(source.rtos),
+            "original_program_preserved_except_declared_policy": True,
+            "only_declared_changes": True,
+            "allowed_changes": ["component_versions", "checksums", "update_policy", "demo_recovery_metadata"],
+            "update_policy": policy,
             "changed_sections": changed, "preserved_sections": preserved,
             "iconbin_sha256": sha256(restored.icon_bytes), "hardware": "not_tested"}
 
 
-def rollback_firmware(editor, target_sha, current_project_id, version=None):
+def rollback_firmware(editor, target_sha, current_project_id, version=None, allow_older=True):
     """Repackage the selected old program at a new number; never recompile it."""
     from .firmware import load_image, repack_image, inspect_firmware
     from .crops import read_crops, recipe
@@ -174,12 +180,21 @@ def rollback_firmware(editor, target_sha, current_project_id, version=None):
         # The current input may have arrived from another computer and be newer
         # than the local ledger; it must still be a version allocation floor.
         next_version = editor._allocate_version(source.version, version, current=current.version)
-        before_crops, before_crop_inspection = read_crops(source.rtos)
+        generic = not bool(source.layout_proof.get("backend_source_verified"))
+        try:
+            before_crops, before_crop_inspection = read_crops(source.rtos)
+        except (ValueError, KeyError, IndexError, struct.error):
+            before_crops, before_crop_inspection = [], {"native_readback": "unknown"}
         before_shutdown = read_shutdown(source)
-        before_menu = read_menu_resources(source, _metadata(source.rtos) or {})
+        try:
+            source_metadata = _metadata(source.rtos) or {}
+        except (ValueError, TypeError, KeyError, struct.error):
+            source_metadata = {}
+        before_menu = read_menu_resources(source, source_metadata) if not generic else None
         target_rtos = (wrap_official_input(source.rtos, source.icon_bytes)
-                       if _metadata(source.rtos) is None else source.rtos)
-        candidate, package_report = repack_image(source, target_rtos, new_version=version_word(next_version))
+                       if not generic and not source_metadata else source.rtos)
+        candidate, package_report = repack_image(source, target_rtos, new_version=version_word(next_version),
+                                                 allow_older=allow_older)
         build_id = editor.store.new_id("build")
         folder = editor.store.root / "builds" / build_id
         folder.mkdir(parents=True, exist_ok=True)
@@ -188,20 +203,33 @@ def rollback_firmware(editor, target_sha, current_project_id, version=None):
         restored = load_image(firmware_path)
         if not restored.editable:
             raise ValueError("恢复候选未匹配 demo 布局")
-        preservation = _verify_program(source, restored)
-        crops, crop_inspection = read_crops(restored.rtos)
-        if recipe(crops) != recipe(before_crops) or [row.get("geometry") for row in crops] != [row.get("geometry") for row in before_crops]:
-            raise ValueError("恢复固件的裁切原生读回发生变化")
-        if crop_inspection.get("native_readback") != before_crop_inspection.get("native_readback"):
-            raise ValueError("恢复固件的裁切读回状态发生变化")
-        shutdown = read_shutdown(restored)
-        shutdown_menu = read_menu_resources(restored, _metadata(restored.rtos) or {})
-        def resource_values(inventory):
-            return [{key: value for key, value in row.items() if key not in ("offset", "record_offset")}
-                    for row in inventory["resources"]]
-        if resource_values(shutdown) != resource_values(before_shutdown) or shutdown_menu != before_menu:
-            raise ValueError("恢复固件的关机资源读回发生变化")
-        metadata = _metadata(restored.rtos) or {}
+        preservation = _verify_program(source, restored, target_rtos, allow_older)
+        if generic:
+            crops, crop_inspection, shutdown_menu = before_crops, before_crop_inspection, None
+        else:
+            crops, crop_inspection = read_crops(restored.rtos)
+            if recipe(crops) != recipe(before_crops) or [row.get("geometry") for row in crops] != [row.get("geometry") for row in before_crops]:
+                raise ValueError("恢复固件的裁切原生读回发生变化")
+            if crop_inspection.get("native_readback") != before_crop_inspection.get("native_readback"):
+                raise ValueError("恢复固件的裁切读回状态发生变化")
+            shutdown = read_shutdown(restored)
+            restored_metadata = _metadata(restored.rtos) or {}
+            shutdown_menu = read_menu_resources(restored, restored_metadata)
+            old_res = next(row for row in source.sections if row["name"] == "RES")
+            new_res = next(row for row in restored.sections if row["name"] == "RES")
+            res_shift = new_res["start"] - old_res["start"]
+            expected_resources, expected_menu = deepcopy(before_shutdown["resources"]), deepcopy(before_menu)
+            for rows in (expected_resources, expected_menu["presets"] if expected_menu else []):
+                for row in rows:
+                    for field in ("offset", "record_offset"):
+                        if field in row:
+                            row[field] += res_shift
+            if shutdown["resources"] != expected_resources or shutdown_menu != expected_menu:
+                raise ValueError("恢复固件的关机资源读回发生变化")
+        try:
+            metadata = _metadata(restored.rtos) or {}
+        except (ValueError, TypeError, KeyError, struct.error):
+            metadata = {}
         if metadata.get("crop_icons"):
             from .crop_icons import verify_crop_icons
             preservation["crop_icons"] = verify_crop_icons(restored, metadata["crop_icons"])
@@ -215,10 +243,13 @@ def rollback_firmware(editor, target_sha, current_project_id, version=None):
                         restored_from_version=version_text(source.version), edition="demo-crop-shutdown",
                         crops=crops, crop_inspection=crop_inspection, shutdown_menu=shutdown_menu,
                         package_report=package_report, restoration_report=preservation,
+                        update_policy=package_report["update_policy"],
                         inspection=inspect_firmware(restored),
                         repack_provenance=editor.source_provenance(),
                         validation={"offline": "passed", "hardware": "not_tested", "camera_or_card_written": False,
-                                    "scope": "fresh container/component/version decode; original program and resources preserved except version/checksum fields and official-input demo recovery metadata; native crop/shutdown readback; no hardware result"})
+                                    "scope": ("fresh container/component/version decode and update policy readback; original program and resource bytes preserved except declared version/checksum, update policy and demo recovery metadata; native crop/shutdown readback; no camera update, flash or boot result"
+                                              if not generic else
+                                              "fresh container/component/version decode and update policy readback; imported resources preserved; no feature-layout write; no camera update, flash or boot result")})
         if not original_manifest:
             manifest.update(recipe_crops=deepcopy(before_crops),
                             patch_report={"operation": "restore_complete_program_without_compiler"})

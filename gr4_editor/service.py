@@ -6,12 +6,40 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import subprocess
+import struct
 
 from .bootstrap import DATA_ROOT, EDITOR_ROOT, PROJECT_ROOT
 from .store import Store, sha256, timestamp, write_json
 from .versions import allocate_version, version_text, version_word
 
 EDITION = "demo-crop-shutdown"
+
+
+def _update_policy_draft(value=None, fallback=True):
+    """Validate the saved low-version support choice."""
+    if value is None:
+        value = fallback
+    if type(value) is not bool:
+        if isinstance(value, dict) and set(value) in ({"allow_older"}, {"schema_version", "allow_older"}):
+            value = value.get("allow_older")
+        else:
+            raise ValueError("低版本固件支持开关必须是布尔值")
+    if type(value) is not bool:
+        raise ValueError("低版本固件支持开关必须是布尔值")
+    return {"schema_version": 1, "allow_older": value}
+
+
+def _build_options(value=None, fallback=True):
+    """Validate the build options sent by the web editor."""
+    if value is None:
+        return {"allow_older": bool(fallback)}
+    if isinstance(value, dict):
+        if set(value) != {"allow_older"} or type(value["allow_older"]) is not bool:
+            raise ValueError("低版本固件支持开关必须是布尔值")
+        return {"allow_older": value["allow_older"]}
+    if type(value) is bool:
+        return {"allow_older": value}
+    raise ValueError("低版本固件支持开关必须是布尔值")
 
 
 class Editor:
@@ -31,7 +59,9 @@ class Editor:
                 projects.append({key: value.get(key) for key in ("id", "title", "updated_at", "input")})
         return {"version": "0.1.0-demo", "edition": EDITION, "projects": projects,
                 "data_directory": str(self.store.root), **self.settings(),
-                "builds": self.store.ledger(), "capabilities": self._capabilities()}
+                "builds": self.store.ledger(), "capabilities": self._capabilities(),
+                "update_policy": {"policy": "allow_older", "required_for_generated_firmware": False,
+                                  "default_allow_older": True, "hardware_verified": False}}
 
     def firmware_history(self, project_id=None):
         from .history import history_index
@@ -45,14 +75,19 @@ class Editor:
         from .history import open_firmware
         return open_firmware(self, digest)
 
-    def rollback_history_firmware(self, digest, project_id, version=None):
+    def rollback_history_firmware(self, digest, project_id, version=None, allow_older=True):
         from .history import rollback_firmware
-        return rollback_firmware(self, digest, project_id, version)
+        return rollback_firmware(self, digest, project_id, version, allow_older=allow_older)
 
-    def _capabilities(self, image=None, editable=False):
+    def _capabilities(self, image=None, editable=False, feature_backend=None):
         if image is not None:
             editable = image.editable
+            feature_backend = image.layout_proof.get("backend_source_verified", False)
+        if feature_backend is None:
+            feature_backend = bool(editable)
         return {"can_import": True, "can_edit": bool(editable), "can_build": bool(editable),
+                "feature_backend_verified": bool(feature_backend),
+                "requires_toolchain": bool(feature_backend),
                 "crop_supported": True, "shutdown_supported": True, "edition": EDITION}
 
     def import_firmware(self, data, filename="fwdc248b.bin"):
@@ -65,14 +100,21 @@ class Editor:
             raise ValueError("已保存的输入固件哈希不一致")
         info = inspect_firmware(image)
         info["editor_supported"] = image.editable
-        crops, inspection = read_crops(image.rtos)
+        try:
+            crops, inspection = read_crops(image.rtos)
+        except (ValueError, KeyError, IndexError, struct.error) as exc:
+            crops, inspection = [], {
+                "native_readback": "unknown", "compiler_supported": False,
+                "reason": "裁切布局未识别：" + str(exc), "notes": []}
         crop_capabilities = capabilities(inspection)
-        if not image.editable:
+        feature_backend = bool(info.get("layout_proof", {}).get("backend_source_verified"))
+        if not feature_backend:
             crop_capabilities.update(can_edit=False, can_add=False, can_write=False, draft_only=True,
-                                     reason="此输入未匹配 demo 布局，只能读取；请使用已适配官方原版或 demo 候选")
+                                     reason="此输入可导入并生成保留资源的版本/回退候选，但裁切写入布局尚未适配")
         inventory = read_shutdown(image)
-        if not image.editable:
-            inventory["capabilities"].update(can_prepare_assets=False, can_build_menu=False)
+        if not feature_backend:
+            inventory["capabilities"].update(can_prepare_assets=False, can_build_menu=False,
+                                               menu_build_reason="此输入可导入并生成保留资源的版本/回退候选，但关机菜单写入布局尚未适配")
         project = {"schema_version": 1, "edition": EDITION, "id": self.store.new_id("project"),
                    "title": Path(filename).stem, "created_at": timestamp(),
                    "input": {"filename": Path(filename).name, "sha256": digest,
@@ -81,16 +123,36 @@ class Editor:
                    "can_generate": image.editable, "suggested_version": self._allocate_version(image.version),
                    "builds": self._build_ancestry(digest), "crops": crops, "original_crops": deepcopy(crops),
                    "crop_inspection": inspection, "crop_capabilities": crop_capabilities,
-                   "shutdown_inventory": inventory, "shutdown": validate_draft(None, inventory)}
+                   "shutdown_inventory": inventory, "shutdown": validate_draft(None, inventory),
+                   "update_policy_draft": _update_policy_draft(), "build_options": _build_options()}
         return self.store.save_project(project)
 
     def project(self, project_id):
         result = self.store.get_project(project_id)
         if result.get("edition") != EDITION:
             raise ValueError("此编辑记录不属于 demo，请导入原始 BIN 建立新记录")
+        # Projects imported before generic passthrough support persisted the
+        # old read-only flag.  Their strict container proof is enough to
+        # upgrade them without re-decoding a large BIN on every page refresh.
+        proof = result.get("firmware", {}).get("layout_proof", {})
+        if (not result.get("firmware", {}).get("editor_supported") and
+                proof.get("container_checksum_valid") and proof.get("section_order_valid")):
+            result["firmware"]["editor_supported"] = True
+            result["firmware"]["editable"] = True
+            proof["generic_passthrough"] = not bool(proof.get("backend_source_verified"))
+            result["firmware"]["editability"] = {
+                "editable": True,
+                "reason": "Verified firmware container; feature layout is not registered, so generation preserves imported resources"
+                if proof["generic_passthrough"] else "Verified backend RTOS and supported layout"}
         result["suggested_version"] = self._allocate_version(result["input"]["version"])
         result["can_generate"] = bool(result["firmware"].get("editor_supported"))
-        result["capabilities"] = self._capabilities(editable=result["can_generate"])
+        result["capabilities"] = self._capabilities(
+            editable=result["can_generate"],
+            feature_backend=bool(result.get("firmware", {}).get("layout_proof", {}).get("backend_source_verified")))
+        saved = result.get("build_options", result.get("update_policy_draft"))
+        options = _build_options(_update_policy_draft(saved)["allow_older"])
+        result["build_options"] = options
+        result["update_policy_draft"] = _update_policy_draft(options)
         return result
 
     def import_project(self, data):
@@ -114,9 +176,12 @@ class Editor:
                           project["original_crops"], context)
             project["crop_identity_context"] = context
             self.store.save_project(project)
-        return self.save(project["id"], data.get("title"), data.get("crops"), data.get("shutdown"))
+        return self.save(project["id"], data.get("title"), data.get("crops"), data.get("shutdown"),
+                         update_policy_draft=data.get("update_policy_draft"),
+                         build_options=data.get("build_options"))
 
-    def save(self, project_id, title=None, crops=None, shutdown=None):
+    def save(self, project_id, title=None, crops=None, shutdown=None,
+             update_policy_draft=None, build_options=None):
         from .shutdown import validate_draft
         with self.store.lock:
             project = self.project(project_id)
@@ -130,6 +195,12 @@ class Editor:
                 project["crops"] = self._crop_draft(project, crops)
             if shutdown is not None:
                 project["shutdown"] = validate_draft(shutdown, project["shutdown_inventory"])
+            requested_options = build_options if build_options is not None else update_policy_draft
+            if requested_options is None:
+                requested_options = project.get("build_options", project.get("update_policy_draft"))
+            options = _build_options(_update_policy_draft(requested_options)["allow_older"])
+            project["build_options"] = options
+            project["update_policy_draft"] = _update_policy_draft(options)
             return self.store.save_project(project)
 
     def _generated_record(self, digest, seen=None):
@@ -287,32 +358,47 @@ class Editor:
             raise ValueError("输入固件已变化")
         return preview_geometry(image.rtos, ratio)
 
-    def build(self, project_id, version=None):
+    def build(self, project_id, version=None, allow_older=None):
         from .firmware import load_image, repack_image, inspect_firmware
         from .demo_build import build_features, _metadata, canonical_base, OFFICIAL7_SHA
         from .crop_compiler import prepare_crops
         from .crops import read_crops, recipe
-        from .shutdown import read_shutdown
+        from .shutdown import read_shutdown, validate_draft
         from .shutdown_compiler import prepare_menu_plan, read_menu_resources, verify_original_res
         from .crop_icons import verify_crop_icons
         with self.store.lock:
             project = self.project(project_id)
             if not project["can_generate"]:
                 raise ValueError("该输入未匹配可生成的 demo 布局")
+            saved_options = _build_options(project.get("build_options", project.get("update_policy_draft")))
+            allow_older = (saved_options["allow_older"] if allow_older is None else
+                           _build_options(allow_older)["allow_older"])
             image = load_image(project["input_path"])
             if image.sha256 != project["input"]["sha256"] or not image.editable:
                 raise ValueError("输入固件已变化或布局不受支持")
             next_version = self._allocate_version(image.version, version)
-            crop_plan, source_inspection = prepare_crops(image.rtos, _metadata(image.rtos) or {},
-                project["crops"], project["original_crops"], project.get("crop_identity_context"))
-            shutdown_plan, shutdown_res = prepare_menu_plan(image, read_shutdown(image), project["shutdown"])
-            rtos, icons, patch_report = build_features(image.rtos, image.icon_bytes,
-                crop_plan=crop_plan, source_crop_inspection=source_inspection, shutdown_plan=shutdown_plan)
-            frozen_crops, crop_inspection = read_crops(rtos)
-            if crop_inspection.get("native_readback") != "passed":
-                raise ValueError("生成结果的原生裁切读回失败")
+            feature_backend = bool(image.layout_proof.get("backend_source_verified"))
+            if not feature_backend:
+                baseline_shutdown = validate_draft(None, read_shutdown(image))
+                if project["crops"] != project["original_crops"] or project["shutdown"] != baseline_shutdown:
+                    raise ValueError("当前 BIN 只支持保留资源的版本/回退重包；裁切和关机布局尚未适配")
+                rtos, icons = image.rtos, image.icon_bytes
+                crop_plan = shutdown_plan = shutdown_res = None
+                frozen_crops = crop_inspection = None
+                patch_report = {"backend": "generic-preserve", "feature_writes": False,
+                                "limitations": ["未注册的输入布局仅保留原有裁切、关机和图标资源"]}
+            else:
+                crop_plan, source_inspection = prepare_crops(image.rtos, _metadata(image.rtos) or {},
+                    project["crops"], project["original_crops"], project.get("crop_identity_context"))
+                shutdown_plan, shutdown_res = prepare_menu_plan(image, read_shutdown(image), project["shutdown"])
+                rtos, icons, patch_report = build_features(image.rtos, image.icon_bytes,
+                    crop_plan=crop_plan, source_crop_inspection=source_inspection, shutdown_plan=shutdown_plan)
+                frozen_crops, crop_inspection = read_crops(rtos)
+                if crop_inspection.get("native_readback") != "passed":
+                    raise ValueError("生成结果的原生裁切读回失败")
             candidate, package_report = repack_image(image, rtos, new_icon_bytes=icons,
-                new_version=version_word(next_version), new_res_section=shutdown_res)
+                new_version=version_word(next_version), new_res_section=shutdown_res,
+                allow_older=allow_older)
             build_id = self.store.new_id("build")
             folder = self.store.root / "builds" / build_id
             folder.mkdir(parents=True, exist_ok=True)
@@ -321,35 +407,50 @@ class Editor:
             packaged = load_image(firmware_path)
             if not packaged.editable:
                 raise ValueError("重包后的 demo 候选不能独立识别")
-            packaged_crops, packaged_inspection = read_crops(packaged.rtos)
-            if (recipe(packaged_crops) != recipe(frozen_crops)
+            try:
+                packaged_crops, packaged_inspection = read_crops(packaged.rtos)
+            except (ValueError, KeyError, IndexError, struct.error) as exc:
+                packaged_crops, packaged_inspection = project["crops"], {
+                    "native_readback": "unknown", "compiler_supported": False,
+                    "reason": "裁切布局未识别：" + str(exc), "notes": []}
+            if feature_backend and (recipe(packaged_crops) != recipe(frozen_crops)
                     or [row.get("geometry") for row in packaged_crops] != [row.get("geometry") for row in frozen_crops]):
                 raise ValueError("容器重包后的裁切读回不一致")
-            metadata = _metadata(packaged.rtos) or {}
-            if metadata.get("crop_icons"):
+            try:
+                metadata = _metadata(packaged.rtos) or {}
+            except (ValueError, TypeError, KeyError, struct.error):
+                metadata = {}
+            if feature_backend and metadata.get("crop_icons"):
                 patch_report["crop_icon_container_readback"] = verify_crop_icons(packaged, metadata["crop_icons"])
-            installed_shutdown = read_menu_resources(packaged, metadata)
-            if bool(installed_shutdown) != bool(shutdown_plan):
+            installed_shutdown = read_menu_resources(packaged, metadata) if feature_backend else None
+            if feature_backend and bool(installed_shutdown) != bool(shutdown_plan):
                 raise ValueError("生成结果的关机菜单状态不一致")
-            if shutdown_res is not None:
+            if feature_backend and shutdown_res is not None:
                 patch_report["shutdown_resource_preservation"] = verify_original_res(image, packaged)
-            baseline = canonical_base(packaged.rtos)
-            if sha256(baseline) != OFFICIAL7_SHA:
+            baseline = canonical_base(packaged.rtos) if feature_backend else None
+            if feature_backend and sha256(baseline) != OFFICIAL7_SHA:
                 raise ValueError("生成候选无法恢复到已适配的官方基线")
             created = timestamp()
             manifest = {"schema_version": 1, "edition": EDITION, "id": build_id, "project_id": project_id,
                         "created_at": created, "version": next_version, "source": project["input"],
                         "sha256": sha256(candidate), "parent_sha256": image.sha256,
-                        "compiler_base": {"rtos_sha256": OFFICIAL7_SHA, "version": "1.11.10.7",
-                                          "source": "restored user-supplied official input"},
+                        "compiler_base": ({"rtos_sha256": OFFICIAL7_SHA, "version": "1.11.10.7",
+                                           "source": "restored user-supplied official input"}
+                                          if feature_backend else
+                                          {"rtos_sha256": sha256(image.rtos), "version": image.internal_version,
+                                           "source": "preserved imported input; feature layout not registered"}),
                         "recipe_crops": project["crops"], "crops": packaged_crops,
                         "crop_inspection": packaged_inspection, "shutdown_menu": installed_shutdown,
                         "recipe_shutdown": project["shutdown"], "source_provenance": self.source_provenance(),
                         "patch_report": patch_report, "package_report": package_report,
+                        "update_policy": package_report["update_policy"],
+                        "update_policy_requested": allow_older,
                         "inspection": inspect_firmware(packaged),
                         "validation": {"offline": "passed", "hardware": "not_tested",
                                        "camera_or_card_written": False,
-                                       "scope": "container/version/checksum roundtrip; native crop readback; embedded shutdown resources; canonical base recovery; no hardware result"}}
+                                       "scope": ("container/version/checksum and update policy roundtrip; native crop readback; embedded shutdown resources; canonical base recovery; no hardware result"
+                                                 if feature_backend else
+                                                 "container/version/checksum and update policy roundtrip; imported resources preserved; no feature-layout write; no hardware result")}}
             manifest_path = folder / "manifest.json"
             write_json(manifest_path, manifest)
             record = {"id": build_id, "project_id": project_id, "created_at": created, "version": next_version,
