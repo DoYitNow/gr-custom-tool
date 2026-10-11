@@ -1,6 +1,12 @@
 # 第三方材料与许可
 
-本版提供裁切比例和关机画面功能，不包含滤镜校色实现、Gamma 参数、Adobe SDK 色调或样片。本次 `main` 发布快照中，作者有权授权的原创代码、界面和文档采用 [GPL-2.0-only](LICENSE)，授权范围及例外见[作者声明](AUTHOR_STATEMENT.md)。非商业使用及免费、退款表述是作者自愿倡议，不得限制 GPL 已授予的权利，也不能替代第三方许可证。
+本版提供裁切比例、关机画面和已核验布局的滤镜资源写入。XMP 解析、本地近似渲染和离线拟合来自研究版规则；本版不内置原厂固件、DNG、JPEG 样片或第三方 XMP。本次发布快照中，作者有权授权的原创代码、界面和文档采用 [GPL-2.0-only](LICENSE)，授权范围及例外见[作者声明](AUTHOR_STATEMENT.md)。非商业使用及免费、退款表述是作者自愿倡议，不得限制 GPL 已授予的权利，也不能替代第三方许可证。
+
+## 校色数据与 Adobe DNG SDK
+
+校色使用者需要自行准备至少 3 张自己有权使用的 RICOH GR IV DNG，并指定 1 张独立检查样片。DNG 会复制到本机用户数据目录；仓库不提供相机照片。理光官方公开页面可作为拍摄和色彩比较的参考，但页面上的 JPEG 预览不是可供本工具读取的 DNG，也未随本仓库再分发。用户导入的完整 Look/Profile XMP 同样必须由用户确认其修改和再分发权利。
+
+仓库随附的 `gr4_editor/assets/calibration/acr3-default-tone.json` 是从 Android DNG SDK 固定版本 `dng_render.cpp` 提取的 ACR3 forward tone 数值，属于 Adobe DNG 技术派生数据，不是作者原创。分发或修改该文件时须同时保留 [`licenses/adobe-dng-sdk/`](licenses/adobe-dng-sdk/) 中的 `LICENSE.source_code`、`LICENSE.technology`、`PATENTS`、`NOTICE` 和 `SOURCE_NOTICE.txt`，并遵守其条款。`constructor-gamma.json` 是研究所得的数值基线，其第三方权利和公开再分发依据仍需使用者自行核定，不能仅因文件为 JSON 就视为 GPL 原创数据。
 
 ## 运行时组件
 
@@ -9,6 +15,10 @@
 | 组件 | 实际用途与上游许可参考 |
 | --- | --- |
 | Pillow | 裁切图标与关机图片处理；[MIT-CMU](https://github.com/python-pillow/Pillow/blob/main/LICENSE)，轮子所含图片库另有许可 |
+| NumPy | 本地颜色拟合；[BSD 三条款](https://github.com/numpy/numpy/blob/main/LICENSE.txt)，轮子可能包含另有许可的数学运行库 |
+| rawpy | 读取用户提供的 DNG；[MIT](https://github.com/letmaik/rawpy/blob/master/LICENSE)，所用 [LibRaw](https://github.com/LibRaw/LibRaw/tree/master)及其他本机组件另有许可 |
+| opencv-python-headless | 本地近似渲染；[Python 打包层 MIT](https://github.com/opencv/opencv-python/blob/master/LICENSE.txt)、[OpenCV Apache 2.0](https://github.com/opencv/opencv/blob/master/LICENSE)，附带组件以实际轮子的通知为准 |
+| Capstone | 固件分析辅助；[BSD 三条款](https://github.com/capstone-engine/capstone/blob/5.0.9/LICENSE.TXT) |
 | Unicorn | 执行原生 ARM 软件路径；[2.1.4 上游 GPLv2 声明](https://github.com/unicorn-engine/unicorn/blob/2.1.4/README.md)与 [COPYING](https://github.com/unicorn-engine/unicorn/blob/2.1.4/COPYING) |
 
 本版仍实际使用 Unicorn。项目原创代码采用 GPL-2.0-only，不对该组件已有的 GPLv2 权利附加作者的非商业限制。由用户自行通过 pip 安装，不代表后续打包和组合分发的全部许可问题自动消失；本次选定项目许可不等于完成全部第三方权利审查，也不重新授权组件及其附带内容。

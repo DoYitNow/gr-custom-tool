@@ -48,6 +48,13 @@ def make_handler(editor):
                 path, query = self.arguments()
                 if path == "/api/status":
                     return self.response(200, editor.status())
+                if path == "/api/calibration-state":
+                    return self.response(200, editor.calibration_state(query["project_id"], query["filter_id"]))
+                if path == "/api/calibration-output":
+                    target = editor.calibration_output(query["job_id"], query.get("filename", ""))
+                    return self.response(200, target.read_bytes(),
+                                         mimetypes.guess_type(target.name)[0] or "application/octet-stream",
+                                         target.name)
                 if path == "/api/settings":
                     return self.response(200, editor.settings())
                 if path == "/api/history":
@@ -93,6 +100,12 @@ def make_handler(editor):
                 raw = self.body()
                 if path == "/api/import":
                     return self.response(200, editor.import_firmware(raw, query.get("name", "fwdc248b.bin")))
+                if path == "/api/xmp":
+                    return self.response(200, editor.import_xmp(query["project_id"], query["filter_id"], raw,
+                                                                query.get("name", "preset.xmp"),
+                                                                query.get("render_engine", "offline")))
+                if path == "/api/icon":
+                    return self.response(200, editor.import_icon(query["project_id"], query["filter_id"], raw))
                 if path == "/api/shutdown-image":
                     return self.response(200, editor.import_shutdown_image(
                         query["project_id"], query.get("target_id"), raw, query.get("name", "image.png"), query.get("fit", "contain"),
@@ -102,7 +115,15 @@ def make_handler(editor):
                     result = editor.save(data["project_id"], data.get("title"), crops=data.get("crops"),
                                          shutdown=data.get("shutdown"),
                                          update_policy_draft=data.get("update_policy_draft"),
-                                         build_options=data.get("build_options"))
+                                         build_options=data.get("build_options"), filters=data.get("filters"))
+                elif path == "/api/add-filter":
+                    result = editor.add_filter(data["project_id"], data["template_id"], data.get("name"))
+                elif path == "/api/remove-filter":
+                    result = editor.remove_filter(data["project_id"], data["filter_id"])
+                elif path == "/api/calibration/register":
+                    result = editor.register_calibration(data.get("samples"), data.get("heldout"))
+                elif path == "/api/calibration/run":
+                    result = editor.run_calibration(data["project_id"], data["filter_id"], data.get("render_engine"))
                 elif path == "/api/history/open":
                     result = editor.open_history_firmware(data['sha256'])
                 elif path == "/api/history/rollback":

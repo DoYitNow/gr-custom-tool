@@ -4,7 +4,8 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const state = { history: null, rollback: null, project: null, selectedCrop: null, page: "crops", selectedShutdown: null, shutdownDialogMode: "add", shutdownDialogFile: null, dirty: false, busy: false, status: null, settings: null, allowOlder: true };
+const state = { history: null, rollback: null, project: null, selectedFilter: null, selectedCrop: null, page: "filters", selectedShutdown: null, shutdownDialogMode: "add", shutdownDialogFile: null, dirty: false, busy: false, status: null, settings: null, allowOlder: true, dialogMode: "add" };
+const selectedFilter = () => state.project?.filters?.find(row => row.id === state.selectedFilter);
 const selectedCrop = () => state.project?.crops?.find((row) => row.id === state.selectedCrop);
 const shutdownDraft = () => state.project?.shutdown;
 const selectedShutdown = () => shutdownDraft()?.items?.find((row) => row.id === state.selectedShutdown);
@@ -50,6 +51,8 @@ function showBuildResult(target, result, label = "已生成") {
   if (updatePolicy?.status === "verified") {
     const enabled = updatePolicy.installed === true && updatePolicy.policy === "allow_older";
     target.append(element("p", "低版本支持：" + (enabled ? "已开启" : "已关闭"), "field-help"));
+  } else if (updatePolicy?.status === "unsupported") {
+    target.append(element("p", "低版本策略未识别，已保留输入固件原策略；本次开关未修改它。", "field-help"));
   }
   for (const [text, href] of [["下载固件", result.download_url], ["构建清单", result.manifest_url]]) if (href) { const link = element("a", text, "button small secondary"); link.href = href; target.append(link); }
   const support = element("div", undefined, "export-support");
@@ -134,8 +137,11 @@ function acceptProject(project) {
   if (state.project?.id !== project.id) {
     $("build-result").hidden = true; $("build-result").replaceChildren();
     cropPreviews.clear(); cropInputs.clear(); state.selectedCrop = null;
-    state.selectedShutdown = project.shutdown?.selected_item_id || null;
+    state.selectedShutdown = project.shutdown?.selected_item_id || null; state.selectedFilter = null;
   }
+  project.filters ||= [];
+  project.capabilities ||= {};
+  state.selectedFilter = project.filters.some(row => row.id === state.selectedFilter) ? state.selectedFilter : project.filters.find(row => row.editable)?.id || project.filters[0]?.id;
   project.crops ||= [];
   project.original_crops ||= state.project?.id === project.id ? state.project.original_crops : copy(project.crops);
   project.shutdown_inventory ||= { resources: [] };
@@ -161,7 +167,7 @@ async function saveDraft() {
   }
   acceptProject(await request("/api/project", {
     project_id: state.project.id, title: $("project-title").value,
-    crops: state.project.crops, shutdown: state.project.shutdown,
+    crops: state.project.crops, shutdown: state.project.shutdown, filters: state.project.filters,
     build_options: { allow_older: $("allow-older").checked },
   }));
 }
@@ -175,11 +181,11 @@ async function refreshStatus() {
   }
   projects.value = state.project?.id || "";
   $("resume-edit").hidden = !!state.project || !records.some(project => project.id === recentDraftId());
-  renderHistoryBaseline(); renderBuildAvailability();
-  if (!state.project) { renderCropList(); renderShutdownList(); renderPage(); }
+  renderHistoryBaseline(); renderCapabilities(state.project?.capabilities || state.status.capabilities || {}); renderBuildAvailability();
+  if (!state.project) { renderFilterList(); renderCropList(); renderShutdownList(); renderPage(); }
 }
 function revealSelected() {
-  const list = $(state.page === "shutdown" ? "shutdown-list" : "crop-list"); const active = list.querySelector(".active");
+  const list = $(state.page === "shutdown" ? "shutdown-list" : state.page === "filters" ? "filter-list" : "crop-list"); const active = list.querySelector(".active");
   if (!active) return;
   const item = active.getBoundingClientRect(); const bounds = list.getBoundingClientRect();
   if (item.top < bounds.top) list.scrollTop += item.top - bounds.top;
@@ -214,9 +220,9 @@ function renderCropList() {
   $("add-crop").disabled = !canAdd;
   $("add-crop").title = canAdd ? "新增比例" : "当前固件无法新增比例";
   for (const row of rows) {
-    const button = element("button", undefined, "item-row crop-row" + (row.id === state.selectedCrop ? " active" : ""));
+    const button = element("button", undefined, "filter-row crop-row" + (row.id === state.selectedCrop ? " active" : ""));
     button.type = "button"; button.setAttribute("aria-pressed", String(row.id === state.selectedCrop));
-    const info = element("span", undefined, "item-label");
+    const info = element("span", undefined, "filter-label");
     const name = row.name || row.requested_ratio || "未命名比例";
     const label = row.kind === "factory" ? "原厂" : "自定义";
     info.append(element("strong", name), element("small", `${label}${row.requested_ratio && row.requested_ratio !== name ? ` · ${row.requested_ratio}` : ""}`));
@@ -225,6 +231,7 @@ function renderCropList() {
     list.append(button);
   }
   if (!rows.length) list.append(element("p", "暂无比例", "list-empty"));
+  revealSelected();
 }
 function renderCropGeometry(row) {
   const preview = cropPreviews.get(row.id); const geometry = row.geometry; const input = cropInput(row);
@@ -297,9 +304,9 @@ function renderShutdownList() {
   const entries = [{ id: null, name: "原厂默认", preview_data_url: factoryShutdown()?.preview_data_url }, ...rows];
   for (const row of entries) {
     const active = row.id === state.selectedShutdown;
-    const button = element("button", undefined, "item-row shutdown-row" + (active ? " active" : ""));
+    const button = element("button", undefined, "filter-row shutdown-row" + (active ? " active" : ""));
     button.type = "button"; button.setAttribute("aria-pressed", String(active));
-    const info = element("span", undefined, "item-label");
+    const info = element("span", undefined, "filter-label");
     const asset = shutdownDraft().assets.find(asset => asset.id === row.asset_id);
     info.append(element("strong", row.name || "未命名图案"), element("small", row.id === null ? "原厂 · 只读" : asset ? "自定义" : "自定义 · 待选图片"));
     button.append(shutdownThumbnail(row.preview_data_url || asset?.menu_preview_data_url || asset?.preview_data_url, ""), info);
@@ -366,26 +373,105 @@ function renderShutdownDialog() {
   $("confirm-shutdown").disabled = state.shutdownDialogMode === "replace" && upload && !state.shutdownDialogFile;
   $("shutdown-dialog-note").textContent = ""; $("shutdown-dialog-note").hidden = true;
 }
+
+function filterEditable(row) { return !!state.project?.can_generate && row?.editable !== false && (state.project.capabilities?.can_build ?? true); }
+function paintIcon(target, row) {
+  if (!target) return;
+  target.replaceChildren();
+  if (row?.icon_data_url) {
+    const image = element("img"); image.src = row.icon_data_url; image.alt = uiText(row.name || "滤镜") + " 图标"; target.append(image);
+  } else target.append(element("span", "—"));
+}
+function hiddenFilterMarker() {
+  const marker = document.createElement("span"); marker.className = "filter-visibility"; marker.title = "已隐藏"; marker.setAttribute("role", "img"); marker.setAttribute("aria-label", "已隐藏");
+  marker.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Z"></path><circle cx="12" cy="12" r="2.5"></circle><path d="m4 4 16 16"></path></svg>';
+  return marker;
+}
+function renderFilterList() {
+  const list = $("filter-list"); if (!list) return;
+  list.replaceChildren(); const rows = state.project?.filters || []; $("filter-count").textContent = rows.length;
+  const query = ($("filter-search")?.value || "").trim().toLocaleLowerCase();
+  const visible = query ? rows.filter(row => String(row.name || "").toLocaleLowerCase().includes(query)) : rows;
+  const canAdd = !!state.project?.can_generate && state.project?.capabilities?.can_add_filter !== false; $("add-filter").disabled = !canAdd;
+  for (const row of visible) {
+    const button = element("button", undefined, "filter-row" + (row.id === state.selectedFilter ? " active" : "") + (row.enabled === false ? " is-hidden" : ""));
+    button.type = "button"; button.setAttribute("aria-pressed", String(row.id === state.selectedFilter));
+    const icon = element("span", undefined, "preset-icon"); paintIcon(icon, row);
+    const info = element("span", undefined, "filter-label"); const meta = element("small", row.kind === "custom" ? "自定义" : "原厂");
+    if (row.enabled === false) meta.append(hiddenFilterMarker()); info.append(element("strong", row.name || "未命名滤镜"), meta); button.append(icon, info);
+    button.addEventListener("click", () => { state.selectedFilter = row.id; renderFilterList(); renderFilterSelected(); renderPage(); }); list.append(button);
+  }
+  if (!visible.length) list.append(element("p", rows.length ? "无匹配滤镜" : "暂无滤镜", "list-empty")); revealSelected();
+}
+function renderCapabilities(capabilities = {}) {
+  const target = $("capability-summary"); if (!target) return; target.replaceChildren();
+  const limit = capabilities.maximum_custom_slots ?? capabilities.max_custom_slots; const active = capabilities.active_custom_slots;
+  if (limit !== undefined && active !== undefined) target.append(element("span", `自定义 ${active} / ${limit}`));
+  const calibration = state.project?.calibration || state.status?.calibration || {};
+  const xmp = element("span", calibration.dataset_ready || capabilities.xmp_ready ? "XMP 就绪" : "XMP 未就绪"); xmp.title = uiText(calibration.message || "校色资源未就绪"); target.append(xmp); target.hidden = false;
+}
+function filterVisibilityEditable(row) {
+  if (!row || !state.project?.can_generate) return false;
+  const backend = state.project.capabilities?.slot_backend || {};
+  const explicit = row.visibility_editable ?? row.visibility_supported;
+  if (explicit !== undefined) return explicit === true;
+  if (row.kind === "native") return backend.native_visibility_supported === true || backend.native_filter_visibility_supported === true;
+  return row.editable !== false && backend.visibility_supported !== false;
+}
+function parameterSupported(parameter) {
+  if (!parameter || typeof parameter !== "object") return false;
+  if (parameter.parameter_supported !== undefined) return parameter.parameter_supported === true;
+  if (parameter.native_field_supported !== undefined) return parameter.native_field_supported === true;
+  return parameter.default !== null && parameter.default !== undefined;
+}
+function parameterEnabled(parameter) { return typeof parameter?.enabled === "boolean" ? parameter.enabled : parameterSupported(parameter); }
+function parameterToggleEditable(row, parameter) {
+  if (!row || !state.project?.can_generate || parameterSupported(parameter) === false) return false;
+  const explicit = parameter.parameter_enable_supported ?? parameter.enabled_editable ?? parameter.toggle_editable ?? parameter.activation_editable;
+  if (explicit !== undefined) return explicit === true;
+  return state.project.capabilities?.slot_backend?.parameter_enabled_supported === true && row.editable !== false && parameter.editable === true;
+}
+function renderFilterSelected() {
+  const row = selectedFilter(); if (!row) { renderPage(); return; }
+  const editable = filterEditable(row); const caps = state.project?.capabilities || {};
+  $("editor-name").textContent = uiText(row.name || "滤镜"); $("editor-subtitle").textContent = editable ? "" : filterVisibilityEditable(row) ? "原厂资源只读 · 菜单开关可编辑" : "只读"; $("editor-subtitle").hidden = editable && !filterVisibilityEditable(row);
+  paintIcon($("icon-preview"), row); $("filter-name").value = row.name || ""; $("filter-name").maxLength = 80; $("filter-name").disabled = !editable; $("filter-name").title = editable ? "" : "只读";
+  $("change-icon").disabled = !editable || caps.icon_edit_supported === false; $("replace-filter").disabled = !editable || caps.replacement_supported === false;
+  $("remove-filter").disabled = row.kind !== "custom" || !editable || caps.can_remove_filter === false; $("import-xmp").disabled = !editable;
+  const parameters = $("parameters"); parameters.replaceChildren();
+  for (const parameter of row.parameters || []) {
+    const item = element("div", undefined, "parameter-item"); const heading = element("div", undefined, "parameter-heading"); heading.append(element("span", parameter.name || parameter.id));
+    const toggle = element("label", undefined, "toggle parameter-toggle"); const enabled = parameterEnabled(parameter); const toggleInput = element("input"); toggleInput.type = "checkbox"; toggleInput.checked = enabled;
+    const canToggle = parameterToggleEditable(row, parameter); toggleInput.disabled = !canToggle; toggleInput.setAttribute("aria-label", `${parameter.name || parameter.id}开关`); toggleInput.title = canToggle ? "控制该字段是否写入此滤镜" : parameter.enabled === undefined ? "当前固件只读，未读出字段开关" : "该字段的开关写入路径尚未验证";
+    toggleInput.addEventListener("change", () => { parameter.enabled = toggleInput.checked; dirty(); renderFilterSelected(); }); toggle.append(toggleInput, element("span", undefined, "toggle-track"), element("span", "启用")); heading.append(toggle); item.append(heading);
+    if (parameter.default === null || parameter.default === undefined) { const unavailable = element("span", "—", "parameter-default"); unavailable.title = "固件中未提供默认值"; unavailable.setAttribute("aria-label", "固件中未提供默认值"); item.append(unavailable); }
+    else { const input = element("input"); input.type = "number"; input.min = parameter.min; input.max = parameter.max; input.value = parameter.default; input.disabled = !parameterEnabled(parameter) || !editable || !parameter.editable || caps.parameter_defaults_known === false; input.addEventListener("input", () => { parameter.default = Number(input.value); dirty(); }); item.append(input); }
+    parameters.append(item);
+  }
+  const parameterRows = row.parameters || []; const supported = parameterRows.filter(parameterSupported); const enabled = supported.filter(parameterEnabled); const known = parameterRows.every(parameter => parameter.default !== null && parameter.default !== undefined);
+  $("parameter-status").textContent = parameterRows.some(parameter => typeof parameter.enabled === "boolean") ? `${enabled.length} / ${supported.length} 启用` : known ? "默认值" : "只读";
+  $("filter-visible").checked = row.enabled !== false; $("filter-visible").disabled = !filterVisibilityEditable(row);
+  const orderSupported = !!caps.slot_backend?.menu_reorder_supported; const index = state.project.filters.indexOf(row);
+  $("move-up").disabled = !editable || !orderSupported || index === 0 || !state.project.filters[index - 1]?.editable; $("move-down").disabled = !editable || !orderSupported || index === state.project.filters.length - 1 || !state.project.filters[index + 1]?.editable;
+  if ($("run-calibration")) $("run-calibration").hidden = !row.xmp;
+  renderCalibrationForFilter(row);
+}
+function renderCalibrationForFilter(row) {
+  renderXmpCalibration($("calibration"), row);
+}
 function renderPage() {
-  const crops = state.page === "crops";
-  $("crop-section").hidden = !crops; $("shutdown-section").hidden = crops;
-  $("crop-editor").hidden = !crops || !selectedCrop();
-  $("shutdown-editor").hidden = crops || !state.project;
-  $("empty-editor").hidden = !!(crops ? selectedCrop() : state.project);
-  const emptyTitle = $("empty-editor").querySelector("h2"); const emptyNote = $("empty-editor").querySelector("p");
-  if (!state.project) {
-    emptyTitle.textContent = "等待载入";
-    emptyNote.textContent = $("resume-edit").hidden ? "导入后即可开始编辑" : "导入或继续上次编辑";
-  } else if (crops) {
-    const hasCrops = !!state.project.crops.length;
-    emptyTitle.textContent = hasCrops ? "选择裁切比例" : "暂无裁切比例";
-    emptyNote.textContent = hasCrops ? "从左侧选择一个比例" : state.project.crop_capabilities?.can_add ? "在左侧新增比例" : "暂不支持编辑裁切比例";
-  }
-  emptyNote.hidden = !emptyNote.textContent;
-  for (const page of ["crops", "shutdown"]) {
-    $("nav-" + page).classList.toggle("active", state.page === page);
-    $("nav-" + page).setAttribute("aria-pressed", String(state.page === page));
-  }
+  if (!["filters", "crops", "shutdown"].includes(state.page)) state.page = "filters";
+  const filters = state.page === "filters"; const crops = state.page === "crops"; const shutdown = state.page === "shutdown"; const loaded = !!state.project;
+  $("filter-section").hidden = !filters; $("crop-section").hidden = !crops; $("shutdown-section").hidden = !shutdown;
+  $("capability-summary").hidden = true; $("editor-content").hidden = !filters || !selectedFilter(); $("crop-editor").hidden = !crops || !selectedCrop(); $("shutdown-editor").hidden = !shutdown || !loaded;
+  $("empty-editor").hidden = !!(shutdown ? loaded : crops ? selectedCrop() : selectedFilter());
+  const title = $("empty-editor").querySelector("h2"), note = $("empty-editor").querySelector("p");
+  if (!loaded) { title.textContent = "等待载入"; note.textContent = $("resume-edit").hidden ? "导入后即可开始编辑" : "导入或继续上次编辑"; }
+  else if (crops) { const has = !!state.project.crops.length; title.textContent = has ? "选择裁切比例" : "暂无裁切比例"; note.textContent = has ? "从左侧选择一个比例" : state.project.crop_capabilities?.can_add ? "在左侧新增比例" : "暂不支持编辑裁切比例"; }
+  else if (filters) { const has = !!state.project.filters.length; title.textContent = has ? "选择滤镜" : "暂无滤镜"; note.textContent = has ? "从左侧选择一个滤镜" : state.project.capabilities?.can_add_filter ? "在左侧新增滤镜" : ""; }
+  else { title.textContent = "关机图案"; note.textContent = ""; }
+  note.hidden = !note.textContent;
+  for (const page of ["filters", "crops", "shutdown"]) { $("nav-" + page).classList.toggle("active", state.page === page); $("nav-" + page).setAttribute("aria-pressed", String(state.page === page)); }
   revealSelected();
 }
 function renderBuildAvailability() {
@@ -397,11 +483,12 @@ function renderBuildAvailability() {
   const cropFields = rows => rows.map(({ id, name, requested_ratio, identity }) => ({ id, name, requested_ratio, identity }));
   const cropsChanged = JSON.stringify(cropFields(state.project.crops)) !== JSON.stringify(cropFields(state.project.original_crops));
   const cropsBlocked = cropsChanged && !state.project.crop_capabilities?.can_write;
+  const filterPending = state.project.filters.some(row => row.enabled !== false && (row.pending_color_conversion || (row.xmp && row.calibration?.status === "calibration_failed")));
   const menu = shutdownMenuStatus(); const menuBlocked = menu.enabled && !menu.ready;
   $("allow-older").checked = state.allowOlder;
   $("allow-older").disabled = !state.project.can_generate;
-  $("build-firmware").disabled = !state.project.can_generate || toolchainMissing || cropsPending || cropsBlocked || menuBlocked;
-  $("build-note").textContent = uiText(!state.project.can_generate ? "当前固件无法重包" : toolchainMissing ? "请在更多 → 生成设置中配置工具路径" : cropsUnconfirmed ? "请先确认裁切比例" : cropsPending ? "请完成裁切比例" : cropsBlocked ? "当前固件不支持修改裁切比例" : menuBlocked ? menu.reason : "");
+  $("build-firmware").disabled = !state.project.can_generate || toolchainMissing || cropsPending || cropsBlocked || menuBlocked || filterPending;
+  $("build-note").textContent = uiText(!state.project.can_generate ? "当前固件无法重包" : toolchainMissing ? "请在更多 → 设置中配置工具路径" : cropsUnconfirmed ? "请先确认裁切比例" : cropsPending ? "请完成裁切比例" : cropsBlocked ? "当前固件不支持修改裁切比例" : menuBlocked ? menu.reason : filterPending ? "请等待 XMP 校色完成，或处理校色提示后重新转换" : "");
   $("build-note").hidden = !$("build-note").textContent;
 }
 async function previewCrop(row) {
@@ -428,15 +515,34 @@ async function previewCrop(row) {
 }
 function renderSettings() {
   const toolchain = state.settings?.toolchain || {};
-  $("toolchain-status").textContent = uiText(toolchain.message || "请配置生成工具链");
-  $("toolchain-status").className = "callout" + (toolchain.ready === false ? " warning" : "");
-  $("toolchain-clang").value = toolchain.clang || "";
-  $("toolchain-lld").value = toolchain.lld || "";
+  if ($("toolchain-status")) { $("toolchain-status").textContent = uiText(toolchain.message || "请配置生成工具链"); $("toolchain-status").className = "callout" + (toolchain.ready === false ? " warning" : ""); }
+  if ($("toolchain-clang")) $("toolchain-clang").value = toolchain.clang || "";
+  if ($("toolchain-lld")) $("toolchain-lld").value = toolchain.lld || "";
+}
+function renderCalibrationSettings() {
+  const calibration = state.status?.calibration || state.project?.calibration || {};
+  if ($("setup-title")) $("setup-title").textContent = calibration.dataset_ready ? "设置" : "首次设置";
+  if ($("calibration-dialog-status")) $("calibration-dialog-status").textContent = uiText(calibration.message || "校色资源未就绪");
+  if ($("dng-files") && !$("dng-files").files.length) {
+    $("dng-selection").textContent = calibration.dataset_ready ? `${calibration.dataset_source === "bundled" ? "内置默认" : "已保存"} ${calibration.samples} 张样片：${(calibration.sample_names || []).join("、")}` : "至少 3 张支持机型的相机原始 DNG，含 1 张独立检查样片。";
+    $("calibration-heldout").replaceChildren(...(calibration.sample_names || []).map(name => new Option(name, name.replace(/\.dng$/i, ""))));
+    $("calibration-heldout").value = calibration.heldout || "";
+  }
+  if ($("run-calibration")) $("run-calibration").hidden = !selectedFilter()?.xmp;
+  renderSettings();
+  renderCalibrationEngine();
+}
+let calibrationEngine = "offline";
+function renderCalibrationEngine() {
+  const calibration = state.status?.calibration || state.project?.calibration || {};
+  $("calibration-engine").value = calibrationEngine;
+  $("calibration-engine-status").textContent = calibrationEngine === "lightroom"
+    ? (calibration.lightroom_ready ? "Lightroom 插件已连接，可重新转换。" : calibration.classic_installed ? "已安装 Lightroom Classic；提交转换后请打开 Classic，在增效工具管理器中启用 GR4 Firmware Bridge。" : "需要在 Windows 安装 Lightroom Classic，并启用 GR4 Firmware Bridge 插件。")
+    : "本地模拟无需 Lightroom；生成的机内滤镜仍需实拍确认。";
 }
 function openSetup() {
-  return operation("读取工具链设置…", async () => {
-    state.settings = await request("/api/settings"); renderSettings(); $("settings-dialog").showModal();
-  });
+  calibrationEngine = selectedFilter()?.xmp?.render_engine || calibrationEngine;
+  renderCalibrationSettings(); $("calibration-dialog").showModal();
 }
 function loadHistoryFirmware(node) {
   return operation("载入固件…", async () => {
@@ -521,13 +627,14 @@ function render() {
   $("source-sha").textContent = shortSha(project.input.sha256);
   $("source-meta").textContent = project.input.version;
   $("source-meta").title = `SHA-256 ${project.input.sha256}`;
+  $("filter-search").disabled = false;
   $("project-title").disabled = false; $("project-title").value = project.title;
   $("save-project").disabled = !project.can_generate; $("export-project").disabled = false;
   $("save-status").textContent = "已保存"; $("save-status").classList.remove("unsaved");
   $("build-version").disabled = !project.can_generate; $("build-version").value = project.suggested_version;
   $("suggested-version").textContent = "建议 " + project.suggested_version;
   $("build-version").title = "建议版本 " + project.suggested_version;
-  renderBuildAvailability(); renderCropList(); renderCropSelected(); renderShutdownList(); renderShutdownSelected(); renderPage();
+  renderBuildAvailability(); renderCapabilities(project.capabilities || {}); renderFilterList(); renderFilterSelected(); renderCropList(); renderCropSelected(); renderShutdownList(); renderShutdownSelected(); renderPage();
   if (state.history) renderHistory();
 }
 $("import-firmware").onclick = () => { $("firmware-file").value = ""; $("firmware-file").click(); };
@@ -540,7 +647,8 @@ $("firmware-file").onchange = () => operation("导入固件…", async () => {
 $("open-drafts").onclick = () => { $("more-menu").open = false; $("draft-dialog").showModal(); };
 $("load-draft").onclick = () => operation("载入已保存的编辑…", async () => {
   const id = $("local-projects").value; if (!id) throw new Error("请选择编辑记录");
-  await saveDraft(); acceptProject(await request("/api/project?id=" + encodeURIComponent(id)), null); $("draft-dialog").close(); switchView("editor");
+  await saveDraft(); const project = await request("/api/project?id=" + encodeURIComponent(id));
+  $("draft-dialog").close(); acceptProject(project); switchView("editor");
 });
 $("resume-edit").onclick = () => operation("继续上次编辑…", async () => {
   const id = recentDraftId(); if (!state.status?.projects.some(project => project.id === id)) throw new Error("编辑记录已不存在");
@@ -564,7 +672,7 @@ $("rollback-form").onsubmit = async (event) => {
   });
 };
 $("refresh-status").onclick = () => operation("刷新状态…", async () => { await saveDraft(); await refreshStatus(); if (state.project) acceptProject(await request("/api/project?id=" + state.project.id)); });
-for (const page of ["crops", "shutdown"]) $("nav-" + page).onclick = () => { state.page = page; renderPage(); renderBuildAvailability(); };
+for (const page of ["filters", "crops", "shutdown"]) $("nav-" + page).onclick = () => { state.page = page; renderPage(); renderBuildAvailability(); };
 $("add-shutdown").onclick = () => openShutdownDialog("add");
 $("replace-shutdown-image").onclick = () => openShutdownDialog("replace");
 $("choose-shutdown-file").onclick = () => $("shutdown-file").click();
@@ -584,6 +692,7 @@ $("shutdown-form").onsubmit = (event) => {
       if (sourceValue.startsWith("source:")) body.source_id = sourceValue.slice(7);
       if (sourceValue.startsWith("asset:")) body.asset_id = sourceValue.slice(6);
       const project = await request("/api/shutdown-item", body);
+      $("shutdown-dialog").close();
       state.selectedShutdown = project.shutdown.selected_item_id || project.shutdown.items.at(-1).id; acceptProject(project);
     } else state.selectedShutdown = selectedId;
     let bytes, filename;
@@ -599,6 +708,7 @@ $("shutdown-form").onsubmit = (event) => {
       const row = selectedShutdown();
       const itemQuery = mode === "add" ? `&item_name=${encodeURIComponent(name)}` : `&item_id=${encodeURIComponent(row.id)}`;
       const project = await request(`/api/shutdown-image?project_id=${encodeURIComponent(state.project.id)}${itemQuery}&name=${encodeURIComponent(filename)}&fit=${mode === "add" ? "contain" : row.fit || "contain"}`, bytes, true);
+      $("shutdown-dialog").close();
       state.selectedShutdown = project.shutdown.selected_item_id || state.selectedShutdown; acceptProject(project);
     }
     $("shutdown-dialog").close(); state.shutdownDialogFile = null;
@@ -694,7 +804,8 @@ $("open-setup").onclick = () => { $("more-menu").open = false; return openSetup(
 for (const button of document.querySelectorAll("[data-open-support]")) button.onclick = openSupport;
 $("save-toolchain").onclick = () => operation("检查工具链…", async () => {
   await request("/api/toolchain", { clang: $("toolchain-clang").value.trim(), lld: $("toolchain-lld").value.trim() });
-  await refreshStatus(); renderSettings();
+  $("calibration-dialog").close();
+  await refreshStatus(); renderSettings(); notice("工具链设置已保存");
 });
 $("build-firmware").onclick = async () => {
   if (!await requireRiskAcknowledgement("build")) return;
@@ -718,4 +829,78 @@ for (const dialog of document.querySelectorAll("dialog")) dialog.addEventListene
 document.addEventListener("keydown", (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); if (state.project) $("save-project").click(); } });
 window.addEventListener("resize", revealSelected);
 window.addEventListener("beforeunload", (event) => { if (state.dirty || unconfirmedCrops()) { event.preventDefault(); event.returnValue = ""; } });
+
+function openFilterDialog(mode) {
+  state.dialogMode = mode;
+  $("filter-dialog-title").textContent = mode === "add" ? "添加滤镜" : "替换滤镜";
+  $("confirm-filter").textContent = mode === "add" ? "添加" : "替换";
+  $("new-filter-name").value = mode === "add" ? "新滤镜" : selectedFilter()?.name || "";
+  $("template-select").replaceChildren();
+  for (const row of (state.project?.filters || []).filter(row => row.resources?.banks?.length === 3)) $("template-select").add(new Option(row.name, row.id));
+  $("template-select").value = selectedFilter()?.id || $("template-select").options[0]?.value || "";
+  $("filter-dialog-note").textContent = ""; $("filter-dialog-note").hidden = true;
+  $("filter-dialog").showModal();
+}
+function details(title, value) {
+  $("details-title").textContent = uiText(title); $("details-content").replaceChildren(element("pre", JSON.stringify(value, null, 2))); $("details-dialog").showModal();
+}
+function assetSummary(row) {
+  return { identity: row.identity, parameters: row.parameters, resources: {
+    banks: row.resources?.banks?.map(bank => ({ hardware_index: bank.hardware_index, descriptors: bank.descriptor_addresses,
+      matrix: { address: bank.matrix?.address, sha256: bank.matrix?.sha256 }, gamma: { bytes: bank.gamma?.bytes, sha256: bank.gamma?.sha256 },
+      multi_main: { address: bank.multi_main?.address, sha256: bank.multi_main?.sha256 } })),
+    icon: { ...row.resources?.icon, hex: undefined }, name: { ...row.resources?.name, hex: undefined, record_hex: undefined },
+  }, inspection_notes: row.inspection_notes, calibration: row.calibration ? { status: row.calibration.status, message: row.calibration.message, render_engine: row.calibration.render_engine, approximate: row.calibration.approximate, render_boundary: row.calibration.render_boundary } : null };
+}
+$("filter-search")?.addEventListener("input", renderFilterList);
+$("add-filter")?.addEventListener("click", () => openFilterDialog("add"));
+$("replace-filter")?.addEventListener("click", () => openFilterDialog("replace"));
+$("filter-form")?.addEventListener("submit", event => {
+  event.preventDefault(); operation("更新预设…", async () => {
+    const name = $("new-filter-name").value.trim(); const templateId = $("template-select").value;
+    if (!name) throw new Error("请填写预设名称");
+    if (state.dialogMode === "add") {
+      const dialog = $("filter-dialog"); dialog.close();
+      let project;
+      try {
+        await saveDraft(); project = await request("/api/add-filter", { project_id: state.project.id, template_id: templateId, name });
+      } catch (error) {
+        dialog.showModal(); throw error;
+      }
+      state.selectedFilter = project.filters.at(-1)?.id || state.selectedFilter; acceptProject(project);
+    } else {
+      const row = selectedFilter(); const template = state.project.filters.find(item => item.id === templateId);
+      if (!row || !template) throw new Error("请选择有效的替换模板");
+      row.name = name;
+      for (const bank of row.resources?.banks || []) {
+        const source = template.resources?.banks?.find(item => item.hardware_index === bank.hardware_index); if (!source) continue;
+        for (const family of ["matrix", "gamma", "multi_main"]) if (source[family]) bank[family].hex = source[family].hex;
+      }
+      if (template.resources?.icon?.hex && row.resources?.icon) row.resources.icon.hex = template.resources.icon.hex;
+      row.icon_data_url = template.icon_data_url; delete row.xmp; delete row.calibration; row.pending_color_conversion = false; dirty(); await saveDraft();
+      $("filter-dialog").close();
+    }
+    renderFilterList(); renderFilterSelected(); notice("滤镜已保存");
+  });
+});
+$("filter-name")?.addEventListener("input", () => { const row = selectedFilter(); if (!row || !filterEditable(row)) return; row.name = $("filter-name").value; $("editor-name").textContent = uiText(row.name); dirty(); renderFilterList(); });
+$("change-icon")?.addEventListener("click", () => $("icon-file").click());
+$("icon-file")?.addEventListener("change", () => operation("更新图标…", async () => { const file = $("icon-file").files[0]; const row = selectedFilter(); if (!file || !row || !filterEditable(row)) return; await saveDraft(); acceptProject(await request(`/api/icon?project_id=${encodeURIComponent(state.project.id)}&filter_id=${encodeURIComponent(row.id)}`, await file.arrayBuffer(), true)); $("icon-file").value = ""; }));
+for (const [id, delta] of [["move-up", -1], ["move-down", 1]]) $(id)?.addEventListener("click", () => { const rows = state.project?.filters || []; const row = selectedFilter(); const index = rows.indexOf(row); const other = index + delta; if (!row || !filterEditable(row) || other < 0 || other >= rows.length || !filterEditable(rows[other])) return; [rows[index], rows[other]] = [rows[other], rows[index]]; dirty(); renderFilterList(); renderFilterSelected(); });
+$("remove-filter")?.addEventListener("click", () => operation("删除滤镜…", async () => { const row = selectedFilter(); if (!row) return; await saveDraft(); state.selectedFilter = null; acceptProject(await request("/api/remove-filter", { project_id: state.project.id, filter_id: row.id })); }));
+$("filter-details")?.addEventListener("click", () => { const row = selectedFilter(); if (row) details(row.name, assetSummary(row)); });
+$("filter-visible")?.addEventListener("change", () => { const row = selectedFilter(); if (!row || !filterVisibilityEditable(row)) return; row.enabled = $("filter-visible").checked; dirty(); renderFilterList(); renderFilterSelected(); renderBuildAvailability(); });
+$("import-xmp")?.addEventListener("click", () => $("xmp-file").click());
+$("xmp-file")?.addEventListener("change", () => operation("检查 XMP…", async () => { const file = $("xmp-file").files[0]; const row = selectedFilter(); if (!file || !row || !filterEditable(row)) return; await saveDraft(); acceptProject(await request(`/api/xmp?project_id=${state.project.id}&filter_id=${row.id}&name=${encodeURIComponent(file.name)}&render_engine=${calibrationEngine}`, await file.arrayBuffer(), true)); $("xmp-file").value = ""; }));
+$("calibration-engine").onchange = () => { calibrationEngine = $("calibration-engine").value; renderCalibrationEngine(); };
+$("calibration-settings")?.addEventListener("click", openSetup);
+$("choose-dng")?.addEventListener("click", () => $("dng-files").click());
+$("dng-files")?.addEventListener("change", () => { const files = [...$("dng-files").files]; $("dng-selection").textContent = files.length ? `已选择 ${files.length} 张样片` : "至少 3 张支持机型的相机原始 DNG，含 1 张独立检查样片。"; $("calibration-heldout").replaceChildren(...files.map(file => new Option(file.name, file.name.replace(/\.dng$/i, "")))); $("register-calibration").disabled = files.length < 3; });
+function fileBase64(file) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(",")[1]); reader.onerror = reject; reader.readAsDataURL(file); }); }
+$("register-calibration")?.addEventListener("click", () => operation("保存参考样片…", async () => { const files = [...$("dng-files").files]; const samples = await Promise.all(files.map(async file => ({ name: file.name, base64: await fileBase64(file) }))); await request("/api/calibration/register", { samples, heldout: $("calibration-heldout").value }); $("dng-files").value = ""; $("register-calibration").disabled = true; $("calibration-dialog").close(); await refreshStatus(); if (state.project) acceptProject(await request(`/api/project?id=${encodeURIComponent(state.project.id)}`)); renderCalibrationSettings(); notice("样片已保存"); }));
+$("run-calibration")?.addEventListener("click", () => operation("启动校色…", async () => { const row = selectedFilter(); if (!row) return; await saveDraft(); const project = await request("/api/calibration/run", { project_id: state.project.id, filter_id: row.id, render_engine: calibrationEngine }); $("calibration-dialog").close(); acceptProject(project); renderCalibrationSettings(); notice("校色已启动"); }));
+
+let calibrationPollRunning=false;
+setInterval(async()=>{ if(!state.project||state.busy||calibrationPollRunning)return; const pending=(state.project.filters||[]).filter(r=>r.pending_color_conversion); if(!pending.length)return; calibrationPollRunning=true; try { for(const row of pending){ const data=await request(`/api/calibration-state?project_id=${state.project.id}&filter_id=${row.id}`); row.calibration=data.calibration; row.pending_color_conversion=data.pending; if(!data.pending&&data.resources&&row.resources?.banks) { const hashes=data.resource_sha256||{}; const calibration={source_xmp_sha256:data.calibration?.xmp_sha256,render_engine:data.calibration?.render_engine||"offline",approximate:data.calibration?.status==="fitted_offline"}; for(const bank of row.resources.banks){ if(data.resources.matrix) { bank.matrix.hex=data.resources.matrix; if(hashes.matrix) bank.matrix.sha256=hashes.matrix; } if(data.resources.gamma) { bank.gamma.hex=data.resources.gamma; if(hashes.gamma) bank.gamma.sha256=hashes.gamma; } if(data.resources.multi) { bank.multi_main.hex=data.resources.multi; if(hashes.multi) bank.multi_main.sha256=hashes.multi; } if(data.calibration?.status==="fitted_offline") bank.calibration={...(bank.calibration||{}),...calibration}; } } } renderFilterList(); renderFilterSelected(); renderBuildAvailability(); } catch(e){notice(e.message,true);} finally{calibrationPollRunning=false;} },4000);
+
 refreshStatus().catch((error) => notice(error.message, true));

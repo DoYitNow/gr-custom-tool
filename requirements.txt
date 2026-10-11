@@ -1,3 +1,11 @@
-# CPython 3.12, 64-bit. Demo crop graphics, shutdown images and native ARM execution.
+# CPython 3.12. Verified PyPI wheels for Windows x64 and macOS x64/arm64.
+# OpenCV is headless: the editor uses its browser UI, not OpenCV windows.
 Pillow==12.3.0
+numpy==2.5.3
+# rawpy >=0.26 no longer publishes Intel macOS wheels. Preserve the already
+# validated decoder on Windows/Apple Silicon; Intel macOS has a separate pin.
+rawpy==0.27.1; sys_platform != "darwin" or platform_machine != "x86_64"
+rawpy==0.25.1; sys_platform == "darwin" and platform_machine == "x86_64"
+opencv-python-headless==5.0.0.93
+capstone==5.0.9
 unicorn==2.1.4

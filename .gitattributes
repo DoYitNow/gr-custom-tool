@@ -1,2 +1,5 @@
 * text=auto eol=lf
 start.cmd text eol=crlf
+gr4_editor/assets/calibration/samples/R0000289.DNG -text
+gr4_editor/assets/calibration/samples/R0000351.DNG -text
+gr4_editor/assets/calibration/samples/R0000398.DNG -text

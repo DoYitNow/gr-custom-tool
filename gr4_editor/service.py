@@ -10,7 +10,9 @@ import struct
 
 from .bootstrap import DATA_ROOT, EDITOR_ROOT, PROJECT_ROOT
 from .store import Store, sha256, timestamp, write_json
+from .update_policy import inspect_update_policy
 from .versions import allocate_version, version_text, version_word
+from .xmp_editor import XmpEditorMixin, _filter_backend
 
 EDITION = "demo-crop-shutdown"
 
@@ -42,10 +44,11 @@ def _build_options(value=None, fallback=True):
     raise ValueError("低版本固件支持开关必须是布尔值")
 
 
-class Editor:
+class Editor(XmpEditorMixin):
     def __init__(self, root=DATA_ROOT):
         self.store = Store(root)
         self._input_version_cache = {}
+        self._init_xmp_state()
 
     def settings(self):
         from .toolchain import status
@@ -59,7 +62,8 @@ class Editor:
                 projects.append({key: value.get(key) for key in ("id", "title", "updated_at", "input")})
         return {"version": "0.1.0-demo", "edition": EDITION, "projects": projects,
                 "data_directory": str(self.store.root), **self.settings(),
-                "builds": self.store.ledger(), "capabilities": self._capabilities(),
+                "builds": self.store.ledger(), "calibration": self.calibration.status(),
+                "capabilities": self._capabilities(),
                 "update_policy": {"policy": "allow_older", "required_for_generated_firmware": False,
                                   "default_allow_older": True, "hardware_verified": False}}
 
@@ -85,10 +89,13 @@ class Editor:
             feature_backend = image.layout_proof.get("backend_source_verified", False)
         if feature_backend is None:
             feature_backend = bool(editable)
-        return {"can_import": True, "can_edit": bool(editable), "can_build": bool(editable),
+        result = {"can_import": True, "can_edit": bool(editable), "can_build": bool(editable),
                 "feature_backend_verified": bool(feature_backend),
                 "requires_toolchain": bool(feature_backend),
                 "crop_supported": True, "shutdown_supported": True, "edition": EDITION}
+        if image is not None:
+            result.update(self._filter_capabilities(image))
+        return result
 
     def import_firmware(self, data, filename="fwdc248b.bin"):
         from .firmware import load_image, inspect_firmware
@@ -100,6 +107,7 @@ class Editor:
             raise ValueError("已保存的输入固件哈希不一致")
         info = inspect_firmware(image)
         info["editor_supported"] = image.editable
+        filters, filter_backend = self._filter_rows(image)
         try:
             crops, inspection = read_crops(image.rtos)
         except (ValueError, KeyError, IndexError, struct.error) as exc:
@@ -124,7 +132,10 @@ class Editor:
                    "builds": self._build_ancestry(digest), "crops": crops, "original_crops": deepcopy(crops),
                    "crop_inspection": inspection, "crop_capabilities": crop_capabilities,
                    "shutdown_inventory": inventory, "shutdown": validate_draft(None, inventory),
-                   "update_policy_draft": _update_policy_draft(), "build_options": _build_options()}
+                   "update_policy_draft": _update_policy_draft(), "build_options": _build_options(),
+                   "filters": filters, "original_filters": deepcopy(filters), "xmp_version": 1,
+                   "filter_backend_verified": bool(filter_backend), "calibration": self.calibration.status()}
+        project["capabilities"].update(self._filter_capabilities(image, filters))
         return self.store.save_project(project)
 
     def project(self, project_id):
@@ -153,6 +164,8 @@ class Editor:
         options = _build_options(_update_policy_draft(saved)["allow_older"])
         result["build_options"] = options
         result["update_policy_draft"] = _update_policy_draft(options)
+        self._ensure_filter_project(result)
+        result["calibration"] = self.calibration.status()
         return result
 
     def import_project(self, data):
@@ -178,10 +191,10 @@ class Editor:
             self.store.save_project(project)
         return self.save(project["id"], data.get("title"), data.get("crops"), data.get("shutdown"),
                          update_policy_draft=data.get("update_policy_draft"),
-                         build_options=data.get("build_options"))
+                         build_options=data.get("build_options"), filters=data.get("filters"))
 
     def save(self, project_id, title=None, crops=None, shutdown=None,
-             update_policy_draft=None, build_options=None):
+             update_policy_draft=None, build_options=None, filters=None):
         from .shutdown import validate_draft
         with self.store.lock:
             project = self.project(project_id)
@@ -195,6 +208,8 @@ class Editor:
                 project["crops"] = self._crop_draft(project, crops)
             if shutdown is not None:
                 project["shutdown"] = validate_draft(shutdown, project["shutdown_inventory"])
+            if filters is not None:
+                self._save_filters(project, filters)
             requested_options = build_options if build_options is not None else update_policy_draft
             if requested_options is None:
                 requested_options = project.get("build_options", project.get("update_policy_draft"))
@@ -376,8 +391,38 @@ class Editor:
             image = load_image(project["input_path"])
             if image.sha256 != project["input"]["sha256"] or not image.editable:
                 raise ValueError("输入固件已变化或布局不受支持")
+            if any(row.get("pending_color_conversion") and row.get("enabled", True)
+                       for row in project.get("filters", [])):
+                raise ValueError("还有滤镜等待 XMP 颜色转换，不能导出旧颜色")
+            if any(row.get("xmp") and row.get("enabled", True) and
+                   (row.get("calibration") or {}).get("status") == "calibration_failed"
+                   for row in project.get("filters", [])):
+                raise ValueError("有滤镜校色失败，请重新转换后再生成固件")
             next_version = self._allocate_version(image.version, version)
-            feature_backend = bool(image.layout_proof.get("backend_source_verified"))
+            # The public crop/shutdown compiler remains authoritative for its
+            # registered demo inputs.  The research native-filter compiler is
+            # selected only for a verified registry image that the public
+            # compiler cannot canonicalise (for example the .70 baseline).
+            try:
+                public_backend = bool(__import__("gr4_editor.demo_build", fromlist=["supports_image"]).supports_image(image.rtos))
+            except (ImportError, AttributeError, ValueError, TypeError, struct.error):
+                public_backend = False
+            filter_requested = project.get("filters", []) != project.get("original_filters", [])
+            source_policy = inspect_update_policy(image.rtos)
+            policy_supported = source_policy.get("status") == "verified"
+            if not policy_supported and filter_requested:
+                raise ValueError("版本策略未识别，暂不能写入滤镜资源")
+            # A native registry can be recognised even when the RTOS version
+            # gate is not one of the reviewed forms.  Keep that input on the
+            # generic byte-preserving path unless the policy is verified; a
+            # native compiler would canonicalise the gate and silently alter
+            # an unreviewed version check.
+            if not policy_supported:
+                public_backend = False
+            filter_backend = (bool(_filter_backend(image)) and
+                              policy_supported and
+                              (not public_backend or filter_requested))
+            feature_backend = public_backend or filter_backend
             if not feature_backend:
                 baseline_shutdown = validate_draft(None, read_shutdown(image))
                 if project["crops"] != project["original_crops"] or project["shutdown"] != baseline_shutdown:
@@ -387,6 +432,15 @@ class Editor:
                 frozen_crops = crop_inspection = None
                 patch_report = {"backend": "generic-preserve", "feature_writes": False,
                                 "limitations": ["未注册的输入布局仅保留原有裁切、关机和图标资源"]}
+            elif filter_backend:
+                baseline_shutdown = validate_draft(None, read_shutdown(image))
+                if project["crops"] != project["original_crops"] or project["shutdown"] != baseline_shutdown:
+                    raise ValueError("当前滤镜布局沿用公开版固件资源；裁切和关机图案请在公开版已适配输入上编辑")
+                rtos, icons, patch_report, _ = self.filter_build_plan(project, image)
+                crop_plan = shutdown_plan = shutdown_res = None
+                frozen_crops = crop_inspection = None
+                patch_report["backend"] = "canonical-filter-registry"
+                patch_report["feature_writes"] = True
             else:
                 crop_plan, source_inspection = prepare_crops(image.rtos, _metadata(image.rtos) or {},
                     project["crops"], project["original_crops"], project.get("crop_identity_context"))
@@ -413,35 +467,57 @@ class Editor:
                 packaged_crops, packaged_inspection = project["crops"], {
                     "native_readback": "unknown", "compiler_supported": False,
                     "reason": "裁切布局未识别：" + str(exc), "notes": []}
-            if feature_backend and (recipe(packaged_crops) != recipe(frozen_crops)
+            if public_backend and (recipe(packaged_crops) != recipe(frozen_crops)
                     or [row.get("geometry") for row in packaged_crops] != [row.get("geometry") for row in frozen_crops]):
                 raise ValueError("容器重包后的裁切读回不一致")
             try:
                 metadata = _metadata(packaged.rtos) or {}
             except (ValueError, TypeError, KeyError, struct.error):
                 metadata = {}
-            if feature_backend and metadata.get("crop_icons"):
+            if public_backend and metadata.get("crop_icons"):
                 patch_report["crop_icon_container_readback"] = verify_crop_icons(packaged, metadata["crop_icons"])
-            installed_shutdown = read_menu_resources(packaged, metadata) if feature_backend else None
-            if feature_backend and bool(installed_shutdown) != bool(shutdown_plan):
+            installed_shutdown = read_menu_resources(packaged, metadata) if public_backend else None
+            if public_backend and bool(installed_shutdown) != bool(shutdown_plan):
                 raise ValueError("生成结果的关机菜单状态不一致")
-            if feature_backend and shutdown_res is not None:
+            if public_backend and shutdown_res is not None:
                 patch_report["shutdown_resource_preservation"] = verify_original_res(image, packaged)
-            baseline = canonical_base(packaged.rtos) if feature_backend else None
-            if feature_backend and sha256(baseline) != OFFICIAL7_SHA:
+            baseline = canonical_base(packaged.rtos) if public_backend else None
+            if public_backend and sha256(baseline) != OFFICIAL7_SHA:
                 raise ValueError("生成候选无法恢复到已适配的官方基线")
+            packaged_filters = []
+            if filter_backend:
+                from .filter_reader import read_filters
+                packaged_filters = read_filters(packaged)
+                planned_filters = patch_report.get("recipe_filters", project.get("filters", []))
+                source_ids = [row.get("identity", {}).get("style_id") for row in planned_filters]
+                output_ids = [row.get("identity", {}).get("style_id") for row in packaged_filters]
+                source_active = [row.get("identity", {}).get("style_id") for row in planned_filters
+                                 if row.get("enabled", True)]
+                output_active = [row.get("identity", {}).get("style_id") for row in packaged_filters
+                                 if row.get("enabled", True)]
+                if set(source_ids) != set(output_ids) or source_active != output_active:
+                    raise ValueError("生成固件的滤镜身份或活动菜单读回不一致")
+                patch_report["filter_readback"] = {"status": "passed", "count": len(packaged_filters),
+                                                    "hardware": "not_tested"}
             created = timestamp()
             manifest = {"schema_version": 1, "edition": EDITION, "id": build_id, "project_id": project_id,
                         "created_at": created, "version": next_version, "source": project["input"],
                         "sha256": sha256(candidate), "parent_sha256": image.sha256,
                         "compiler_base": ({"rtos_sha256": OFFICIAL7_SHA, "version": "1.11.10.7",
                                            "source": "restored user-supplied official input"}
-                                          if feature_backend else
-                                          {"rtos_sha256": sha256(image.rtos), "version": image.internal_version,
-                                           "source": "preserved imported input; feature layout not registered"}),
+                                          if public_backend else
+                                          ({"rtos_sha256": sha256(__import__("gr4_editor.slots", fromlist=["canonical_base"]).canonical_base(image.rtos)),
+                                            "version": image.internal_version,
+                                            "source": "verified native filter registry base"}
+                                           if filter_backend else
+                                           {"rtos_sha256": sha256(image.rtos), "version": image.internal_version,
+                                            "source": "preserved imported input; feature layout not registered"})),
                         "recipe_crops": project["crops"], "crops": packaged_crops,
                         "crop_inspection": packaged_inspection, "shutdown_menu": installed_shutdown,
-                        "recipe_shutdown": project["shutdown"], "source_provenance": self.source_provenance(),
+                        "recipe_shutdown": project["shutdown"],
+                        "filters": packaged_filters if filter_backend else project.get("filters", []),
+                        "recipe_filters": patch_report.get("recipe_filters", project.get("filters", [])),
+                        "source_provenance": self.source_provenance(),
                         "patch_report": patch_report, "package_report": package_report,
                         "update_policy": package_report["update_policy"],
                         "update_policy_requested": allow_older,
@@ -449,8 +525,10 @@ class Editor:
                         "validation": {"offline": "passed", "hardware": "not_tested",
                                        "camera_or_card_written": False,
                                        "scope": ("container/version/checksum and update policy roundtrip; native crop readback; embedded shutdown resources; canonical base recovery; no hardware result"
-                                                 if feature_backend else
-                                                 "container/version/checksum and update policy roundtrip; imported resources preserved; no feature-layout write; no hardware result")}}
+                                                 if public_backend else
+                                                 ("container/version/checksum, native filter identity/resource readback and update policy; no hardware result"
+                                                  if filter_backend else
+                                                  "container/version/checksum and update policy roundtrip; imported resources preserved; no feature-layout write; no hardware result"))}}
             manifest_path = folder / "manifest.json"
             write_json(manifest_path, manifest)
             record = {"id": build_id, "project_id": project_id, "created_at": created, "version": next_version,

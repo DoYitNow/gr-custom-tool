@@ -175,17 +175,35 @@ def prepare_update_policy(rtos, allow_older=True):
         # the policy transform itself does not depend on that footer schema.
         metadata = None
     transform = apply_update_policy if allow_older else remove_update_policy
+
+    def transform_or_preserve_unknown(data):
+        """Keep a valid but unrecognized version gate byte-exact.
+
+        Generic firmware import is intentionally broader than the reviewed
+        eight-branch rollback patch.  An unknown gate cannot be safely edited,
+        but it also should not prevent a version/container repack.  The build
+        report records that the requested policy was preserved unchanged.
+        """
+        before = inspect_update_policy(data)
+        if before.get("status") != "unsupported":
+            return transform(data)
+        return data, {**before, "source_policy": before.get("policy"),
+                      "requested_policy": "allow_older" if allow_older else "factory",
+                      "preserved_unrecognized": True, "changed_instruction_count": 0}
+
     if metadata is None:
-        return transform(source)
+        return transform_or_preserve_unknown(source)
 
     if metadata.get("demo_read_only"):
         try:
             footer_size = 16 + struct.unpack_from("<I", source, len(source) - 8)[0]
             if footer_size > len(source):
                 raise ValueError("编辑器恢复记录尾部无效")
-            body, proof = transform(source[:-footer_size])
+            body, proof = transform_or_preserve_unknown(source[:-footer_size])
         except struct.error as exc:
             raise ValueError("编辑器恢复记录尾部无效") from exc
+        if proof.get("preserved_unrecognized"):
+            return source, proof
         policy = inspect_update_policy(body)
         if body == source[:-footer_size] and metadata.get("update_policy") == policy:
             return source, proof
@@ -201,7 +219,9 @@ def prepare_update_policy(rtos, allow_older=True):
         raise ValueError("编辑器恢复记录尾部无效") from exc
     if footer_size > len(source):
         raise ValueError("编辑器恢复记录尾部无效")
-    body, proof = transform(source[:-footer_size])
+    body, proof = transform_or_preserve_unknown(source[:-footer_size])
+    if proof.get("preserved_unrecognized"):
+        return source, proof
     policy = inspect_update_policy(body)
     if body == source[:-footer_size] and metadata.get("update_policy") == policy:
         return source, proof

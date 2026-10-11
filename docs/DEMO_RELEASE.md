@@ -1,6 +1,6 @@
 # 发布说明
 
-本仓库当前发布配置从本地完整编辑器核心截取，只提供裁切比例和关机画面。滤镜入口右侧显示“开发中”标签，本分支源码不包含滤镜或校色实现。
+本仓库是公开发布快照。固件容器读取、写入、版本策略和回退以公开版实现为准；XMP 读写规则与颜色拟合来自研究版，并随选定稳定提交同步。公开版不内置原厂固件、JPEG 样片或第三方 XMP；内置 3 张作者提供的 GR IV DNG，供首次校色初始化。默认采用本地模拟目标渲染，Windows 可选 Lightroom Classic 桥接。柔焦／柔光专项冻结，不随发布快照启用。
 
 ## 发布范围
 
@@ -20,7 +20,7 @@ git push origin main
 git archive --format=zip --output=gr-custom-tool-main-source.zip main
 ```
 
-不要使用 `git push --all` 或 `git push --mirror`，也不要把整个工作目录连同 `.git`、本地环境或输入文件一起发布。`git archive` 导出选定提交中的源码和随包捐赠二维码，不包含用户固件、编辑图片或忽略的本地文件。
+不要使用 `git push --all` 或 `git push --mirror`，也不要把整个工作目录连同 `.git`、本地环境或输入文件一起发布。`git archive` 导出选定提交中的源码、随包捐赠二维码和明确登记的 3 张默认 DNG，不包含用户固件、编辑图片或忽略的其他本地文件。
 
 ## GitHub 捐赠入口
 
@@ -32,8 +32,8 @@ git archive --format=zip --output=gr-custom-tool-main-source.zip main
 
 ## 后续开发
 
-产品改动仍在旧研发仓库的唯一完整核心中开发，再将裁切、关机画面及必要公共模块的相关改动同步到当前发布配置。每次同步应保留本版功能范围和独立恢复标记；不把完整滤镜实现或旧研发 Git 历史合入本分支。
+产品改动仍在研究仓库的唯一完整核心中开发，再将选定稳定提交中的固件公共逻辑、XMP 规则和必要模块同步到当前发布配置。每次同步应保留本版功能范围和独立恢复标记；除已列明的 3 张内置 DNG 外，不把研究 Git 历史、其他私有样片或柔焦／柔光冻结专项合入本分支。
 
-当前没有自动同步脚本或安装包。用户首次运行仍需自行准备 64 位 Python 3.12；生成需要 LLVM 工具链，启动器负责安装本版 Python 依赖，详见 [README](../README.md)。
+当前没有自动同步脚本或安装包。用户首次运行仍需自行准备 64 位 Python 3.12；生成需要 LLVM 工具链，校色还需要 NumPy、rawpy、OpenCV 和 Capstone，启动器负责安装并检查固定版本依赖，详见 [README](../README.md)。全新数据目录会使用仓库内置的 3 张 GR IV DNG（`R0000398.DNG` 为独立检查样片）；已有校色数据不会被覆盖，也可以改用自己的样片。理光公开页面的 JPEG 预览不能替代 DNG。Lightroom Classic 是 Windows 可选链路，需要用户自行安装并打开 Classic、在增效工具管理器启用 GR4 Firmware Bridge；程序不会自动启动 Classic。该桥接目前只有接口与离线验证，尚未完成真实 Lightroom 渲染。
 
-当前功能拆分尚未运行端到端、编译生成或硬件验证。保留的测试文件不表示本次已运行或通过；完整版本此前的离线记录不能替代本版验证。启动空白页面也不等于编辑、生成或设备功能已经验证。发布须保留 [LICENSE](../LICENSE)、[使用协议](../web/terms.html)、[作者声明](../AUTHOR_STATEMENT.md)和 [第三方说明](../THIRD_PARTY_NOTICES.md)。
+当前发布验证以离线测试和文件结构检查为界，不写成实机通过。保留的测试文件不表示本次已运行或通过；完整版本此前的离线记录不能替代本版验证。发布须保留 [LICENSE](../LICENSE)、[使用协议](../web/terms.html)、[作者声明](../AUTHOR_STATEMENT.md)和 [第三方说明](../THIRD_PARTY_NOTICES.md)。

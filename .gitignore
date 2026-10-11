@@ -8,6 +8,9 @@ data/
 *.rtos
 *.DNG
 *.dng
+!gr4_editor/assets/calibration/samples/R0000289.DNG
+!gr4_editor/assets/calibration/samples/R0000351.DNG
+!gr4_editor/assets/calibration/samples/R0000398.DNG
 *.xmp
 *.dcp
 *.npy

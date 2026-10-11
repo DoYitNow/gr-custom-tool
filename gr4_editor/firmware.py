@@ -215,15 +215,26 @@ def _load_bytes(candidate: bytes, path: Path | None = None) -> FirmwareImage:
         # Importing a shared editor output must not require this computer's
         # local build ledger. The backend verifies its RTOS body/footer; the
         # container/section/version checks above still apply to the new input.
-        # Keep this import lazy: the demo compiler uses the native resource reader.
+        # Keep these imports lazy.  The public demo backend owns crop/shutdown
+        # writes, while the research registry backend owns native filter
+        # writes.  Either verified backend may mark the image as a feature
+        # input; an unknown but structurally valid container remains generic
+        # passthrough and is never sent to a native writer.
         backend_verified, registry_metadata = False, None
         try:
             from . import demo_build
-            backend_verified = bool(demo_build.supports_image(rtos))
-            if backend_verified:
+            if demo_build.supports_image(rtos):
+                backend_verified = True
                 registry_metadata = demo_build._metadata(rtos)
         except (ImportError, AttributeError, ValueError, TypeError, struct.error):
-            backend_verified = False
+            pass
+        try:
+            from . import slots
+            if slots.supports_image(rtos):
+                backend_verified = True
+                registry_metadata = slots._metadata(rtos)
+        except (ImportError, AttributeError, ValueError, TypeError, struct.error):
+            pass
         # A structurally valid GR4 container is always importable and can be
         # re-packed while preserving its unregistered resources.  The feature
         # compiler still uses ``backend_source_verified`` below to decide
@@ -486,6 +497,7 @@ def repack_image(image: FirmwareImage, new_rtos: bytes, new_icon_bytes: bytes | 
     if type(allow_older) is not bool:
         raise ValueError('低版本固件支持开关必须是布尔值')
     from .demo_build import prepare_update_policy
+    source_policy = inspect_update_policy(image.rtos)
     policy_rtos, policy_installation = prepare_update_policy(new_rtos, allow_older=allow_older)
     target_rtos = _patch_rtos_version(policy_rtos, old, new)
     if len(target_rtos) < len(image.rtos) or len(target_rtos) % 4:
@@ -523,9 +535,13 @@ def repack_image(image: FirmwareImage, new_rtos: bytes, new_icon_bytes: bytes | 
     candidate = framed_container(transient.candidate, payload, target)
     verified = _load_bytes(candidate)
     policy = inspect_update_policy(verified.rtos)
-    if allow_older and not policy.get('installed'):
+    if source_policy.get('status') == 'unsupported':
+        if (policy.get('status') != 'unsupported' or
+                policy.get('gate_sha256') != source_policy.get('gate_sha256')):
+            raise FirmwareError('未识别的版本策略在重包时发生变化')
+    elif allow_older and not policy.get('installed'):
         raise FirmwareError('rebuilt firmware is missing the verified update policy')
-    if not allow_older and (policy.get('status') != 'verified' or policy.get('policy') != 'factory'):
+    elif not allow_older and (policy.get('status') != 'verified' or policy.get('policy') != 'factory'):
         raise FirmwareError('rebuilt firmware did not restore the factory update policy')
     if verified.decoded != target or verified.rtos != target_rtos or verified.icon_bytes != icons:
         raise FirmwareError('rebuilt import does not equal requested resources')

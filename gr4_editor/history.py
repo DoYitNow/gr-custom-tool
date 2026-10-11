@@ -112,11 +112,18 @@ def _verify_program(source, restored, source_rtos=None, allow_older=None):
     from .update_policy import inspect_update_policy
     if source_rtos is None:
         source_rtos = source.rtos
+    source_policy = inspect_update_policy(source_rtos)
     restored_policy = inspect_update_policy(restored.rtos)
     if allow_older is None:
-        if restored_policy.get("status") != "verified":
-            raise ValueError("恢复固件的低版本策略无法识别")
-        allow_older = bool(restored_policy.get("installed"))
+        if source_policy.get("status") == "unsupported":
+            # The unknown policy is preserved byte-for-byte; use the normal
+            # request value only to satisfy the transform API, then skip the
+            # verified-policy equality check below.
+            allow_older = True
+        else:
+            if restored_policy.get("status") != "verified":
+                raise ValueError("恢复固件的低版本策略无法识别")
+            allow_older = bool(restored_policy.get("installed"))
     old, new = version_word(source.version), version_word(restored.version)
     if [row["name"] for row in source.sections] != [row["name"] for row in restored.sections]:
         raise ValueError("恢复固件改变了节布局")
@@ -144,7 +151,11 @@ def _verify_program(source, restored, source_rtos=None, allow_older=None):
     if source.icon_bytes != restored.icon_bytes:
         raise ValueError("恢复固件改变了 ICONBIN 像素")
     policy = restored_policy
-    if policy.get("status") != "verified" or policy.get("installed") is not allow_older:
+    if source_policy.get("status") == "unsupported":
+        if (policy.get("status") != "unsupported" or
+                policy.get("gate_sha256") != source_policy.get("gate_sha256")):
+            raise ValueError("未识别的低版本策略在恢复时发生变化")
+    elif policy.get("status") != "verified" or policy.get("installed") is not allow_older:
         raise ValueError("恢复固件的低版本策略读回不一致")
     return {"status": "passed", "only_version_and_checksums_changed": policy_rtos == source.rtos,
             "demo_recovery_metadata_appended": len(source_rtos) > len(source.rtos),

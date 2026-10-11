@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "kind": "bundled-gr-iv-calibration-samples",
+  "camera": "RICOH GR IV",
+  "source": "Author-provided GR IV DNG calibration samples",
+  "heldout": "R0000398.DNG",
+  "samples": [
+    {
+      "name": "R0000289.DNG",
+      "path": "samples/R0000289.DNG",
+      "sha256": "b1f586032788f453627348d08f1657d3e83bbce78f5ecfb2ac2017368d788411",
+      "role": "development",
+      "metadata": {
+        "make": "RICOH IMAGING COMPANY, LTD.  ",
+        "model": "RICOH GR IV                     ",
+        "ifd_width": 160,
+        "ifd_height": 120,
+        "raw_width": 6304,
+        "raw_height": 4224,
+        "visible_width": 6224,
+        "visible_height": 4160
+      }
+    },
+    {
+      "name": "R0000351.DNG",
+      "path": "samples/R0000351.DNG",
+      "sha256": "97b5458ffba469488628e178d1af14b9cac4430cef726eacb89b01b114c15063",
+      "role": "development",
+      "metadata": {
+        "make": "RICOH IMAGING COMPANY, LTD.  ",
+        "model": "RICOH GR IV                     ",
+        "ifd_width": 160,
+        "ifd_height": 120,
+        "raw_width": 6304,
+        "raw_height": 4224,
+        "visible_width": 6224,
+        "visible_height": 4160
+      }
+    },
+    {
+      "name": "R0000398.DNG",
+      "path": "samples/R0000398.DNG",
+      "sha256": "59eff9d37056d994f6eae95215953cb94ec81b0f244e39506627e66f2872973e",
+      "role": "holdout",
+      "metadata": {
+        "make": "RICOH IMAGING COMPANY, LTD.  ",
+        "model": "RICOH GR IV                     ",
+        "ifd_width": 160,
+        "ifd_height": 120,
+        "raw_width": 6304,
+        "raw_height": 4224,
+        "visible_width": 6224,
+        "visible_height": 4160
+      }
+    }
+  ]
+}

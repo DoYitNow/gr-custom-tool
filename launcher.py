@@ -10,6 +10,7 @@ import importlib
 import importlib.metadata
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import subprocess
@@ -23,7 +24,7 @@ ROOT = Path(__file__).resolve().parent
 VENV = ROOT / '.venv'
 REQUIREMENTS = ROOT / 'requirements.txt'
 PYPI = 'https://pypi.org/simple'
-RUNTIME_MODULES = ('PIL', 'unicorn')
+RUNTIME_MODULES = ('PIL', 'numpy', 'rawpy', 'cv2', 'capstone', 'unicorn')
 
 
 def locked_requirements(path=REQUIREMENTS):
@@ -32,7 +33,19 @@ def locked_requirements(path=REQUIREMENTS):
         line = line.split('#', 1)[0].strip()
         if not line:
             continue
-        match = re.fullmatch(r'([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)', line)
+        requirement, _, marker = line.partition(';')
+        if marker:
+            intel_mac = sys.platform == 'darwin' and platform.machine() == 'x86_64'
+            supported = {
+                'sys_platform != "darwin" or platform_machine != "x86_64"': not intel_mac,
+                'sys_platform == "darwin" and platform_machine == "x86_64"': intel_mac,
+            }
+            marker = marker.strip()
+            if marker not in supported:
+                raise ValueError('依赖文件含尚未支持的平台条件：' + marker)
+            if not supported[marker]:
+                continue
+        match = re.fullmatch(r'([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)', requirement.strip())
         if not match:
             raise ValueError('依赖文件必须包含精确版本：' + line)
         entries[match.group(1)] = match.group(2)
