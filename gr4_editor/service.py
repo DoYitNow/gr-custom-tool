@@ -421,9 +421,8 @@ class Editor(XmpEditorMixin):
             filter_backend = (bool(_filter_backend(image)) and
                               policy_supported and
                               (not public_backend or filter_requested))
-            # The selected compiler also owns readback and manifest scope.
-            # Official input is accepted by both backends, but a filter build
-            # has no frozen crop plan or demo recovery footer to validate.
+            # The selected compiler also owns its canonical recovery record.
+            # Both compilers rebuild and verify crops and shutdown resources.
             public_backend = public_backend and not filter_backend
             feature_backend = public_backend or filter_backend
             if not feature_backend:
@@ -436,12 +435,21 @@ class Editor(XmpEditorMixin):
                 patch_report = {"backend": "generic-preserve", "feature_writes": False,
                                 "limitations": ["未注册的输入布局仅保留原有裁切、关机和图标资源"]}
             elif filter_backend:
-                baseline_shutdown = validate_draft(None, read_shutdown(image))
-                if project["crops"] != project["original_crops"] or project["shutdown"] != baseline_shutdown:
-                    raise ValueError("当前滤镜布局沿用公开版固件资源；裁切和关机图案请在公开版已适配输入上编辑")
-                rtos, icons, patch_report, _ = self.filter_build_plan(project, image)
-                crop_plan = shutdown_plan = shutdown_res = None
-                frozen_crops = crop_inspection = None
+                inventory = read_shutdown(image)
+                old_inventory = project.get("shutdown_inventory", {})
+                # Older public imports could read a registry menu but failed
+                # to recover its original control bodies, leaving an empty
+                # inventory/draft. Restore that imported menu before rebuild.
+                if (inventory.get("resources") and not old_inventory.get("resources") and
+                        project["shutdown"] == validate_draft(None, old_inventory)):
+                    project["shutdown"] = validate_draft(None, inventory)
+                project["shutdown_inventory"] = inventory
+                shutdown_plan, shutdown_res = prepare_menu_plan(image, inventory, project["shutdown"])
+                rtos, icons, patch_report, _ = self.filter_build_plan(project, image, shutdown_plan=shutdown_plan)
+                crop_plan = None
+                frozen_crops, crop_inspection = read_crops(rtos)
+                if crop_inspection.get("native_readback") != "passed":
+                    raise ValueError("生成结果的原生裁切读回失败")
                 patch_report["backend"] = "canonical-filter-registry"
                 patch_report["feature_writes"] = True
             else:
@@ -470,19 +478,22 @@ class Editor(XmpEditorMixin):
                 packaged_crops, packaged_inspection = project["crops"], {
                     "native_readback": "unknown", "compiler_supported": False,
                     "reason": "裁切布局未识别：" + str(exc), "notes": []}
-            if public_backend and (recipe(packaged_crops) != recipe(frozen_crops)
+            if feature_backend and (packaged_inspection.get("native_readback") != "passed" or
+                    not packaged_inspection.get("raw_recut_complete")):
+                raise ValueError("容器重包后的裁切/RAW 读回失败")
+            if feature_backend and (recipe(packaged_crops) != recipe(frozen_crops)
                     or [row.get("geometry") for row in packaged_crops] != [row.get("geometry") for row in frozen_crops]):
                 raise ValueError("容器重包后的裁切读回不一致")
             try:
                 metadata = _metadata(packaged.rtos) or {}
             except (ValueError, TypeError, KeyError, struct.error):
                 metadata = {}
-            if public_backend and metadata.get("crop_icons"):
+            if feature_backend and metadata.get("crop_icons"):
                 patch_report["crop_icon_container_readback"] = verify_crop_icons(packaged, metadata["crop_icons"])
-            installed_shutdown = read_menu_resources(packaged, metadata) if public_backend else None
-            if public_backend and bool(installed_shutdown) != bool(shutdown_plan):
+            installed_shutdown = read_menu_resources(packaged, metadata) if feature_backend else None
+            if feature_backend and bool(installed_shutdown) != bool(shutdown_plan):
                 raise ValueError("生成结果的关机菜单状态不一致")
-            if public_backend and shutdown_res is not None:
+            if feature_backend and shutdown_res is not None:
                 patch_report["shutdown_resource_preservation"] = verify_original_res(image, packaged)
             baseline = canonical_base(packaged.rtos) if public_backend else None
             if public_backend and sha256(baseline) != OFFICIAL7_SHA:
@@ -531,7 +542,7 @@ class Editor(XmpEditorMixin):
                                        "camera_or_card_written": False,
                                        "scope": ("container/version/checksum and update policy roundtrip; native crop readback; embedded shutdown resources; canonical base recovery; no hardware result"
                                                  if public_backend else
-                                                 ("container/version/checksum, native filter identity/resource readback and update policy; no hardware result"
+                                                  ("container/version/checksum, native filter identity/resource and crop readback; embedded shutdown resources and update policy; no hardware result"
                                                   if filter_backend else
                                                   "container/version/checksum and update policy roundtrip; imported resources preserved; no feature-layout write; no hardware result"))}}
             manifest_path = folder / "manifest.json"

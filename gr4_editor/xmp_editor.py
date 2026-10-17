@@ -244,8 +244,8 @@ class XmpEditorMixin(CalibrationWorkflow):
                     self._queue_calibration(project["id"], row["id"])
         return result
 
-    def filter_build_plan(self, project, image):
-        """Compile filter rows for a verified native input, or return None."""
+    def filter_build_plan(self, project, image, *, shutdown_plan=None):
+        """Compile the complete feature draft on a verified filter input."""
         backend = _filter_backend(image)
         if backend is None:
             if project.get("filters") not in (None, [], project.get("original_filters", [])):
@@ -259,14 +259,14 @@ class XmpEditorMixin(CalibrationWorkflow):
                (row.get("calibration") or {}).get("status") == "calibration_failed" for row in rows):
             raise ValueError("有滤镜校色失败，请重新转换后再生成固件")
         from .filter_reader import read_filters
-        # The public branch intentionally does not enable the frozen soft-glow
-        # experiment.  Crop/shutdown remain on the public compiler path; this
-        # plan only writes native filter resources and registry state.
+        # Rebuilding from a canonical base must also restore the imported or
+        # edited crops and shutdown menu. Frozen soft-glow stays disabled.
         rtos, icons, report = backend.apply_filter_registry(
             image.rtos, image.icon_bytes, rows, original,
             baseline_rtos=backend.canonical_base(image.rtos),
-            baseline_icons=None, crops=None, prior_crops=None, crop_context=None,
-            shutdown_plan=None, soft_glow_plan={"enabled": False},
+            baseline_icons=None, crops=project.get("crops"),
+            prior_crops=project.get("original_crops"), crop_context=project.get("crop_identity_context"),
+            shutdown_plan=shutdown_plan, soft_glow_plan={"enabled": False},
             unlock_native_mono=None)
         # Force a fresh native readback before packaging.
         readback = read_filters(type("Image", (), {"rtos": rtos, "icon_bytes": icons, "editable": True})())

@@ -211,6 +211,9 @@ def read_shutdown(image: FirmwareImage) -> dict:
     inspection = result['inspection']
     try:
         from .demo_build import _metadata, canonical_base, supports_image
+        from . import slots
+        if slots.supports_image(image.rtos):
+            canonical_base, supports_image = slots.canonical_base, slots.supports_image
         try:
             metadata = _metadata(image.rtos) or {}
         except (ValueError, TypeError, struct.error) as exc:

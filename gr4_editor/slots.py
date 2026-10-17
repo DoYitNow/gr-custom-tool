@@ -1139,24 +1139,25 @@ def apply_filter_registry(rtos, icon_bytes, filters, prior_filters, *, baseline_
     shutdown_record = None
     if shutdown_plan is not None:
         from .shutdown_compiler import install_jpeg_table, next_record, menu_metadata
-        from .shutdown_state import install_shutdown_state, OWNER_BYTES
+        from .shutdown_state import install_shutdown_state
         from .shutdown_menu import install_shutdown_menu
         from .shutdown_preview import install_shutdown_previews
         icons, shutdown_previews = install_shutdown_previews(patch, icons, shutdown_plan)
         preview_by_choice = {row['selection_id']: row['icon_id'] for row in shutdown_previews['custom']}
         factory_preview_icons = {row['native_id']: row['icon_id'] for row in shutdown_previews['factory']}
-        shutdown_record = next_record(metadata, recipes)
+        # The public state module owns independent APData74.  Older research
+        # outputs used record73 in the RAW owner; retain their menu identities
+        # while starting the public record at its factory-choice default.
+        shutdown_metadata = metadata
+        if metadata.get('shutdown_menu', {}).get('record') == 73:
+            shutdown_metadata = {**metadata, 'shutdown_menu': {
+                **metadata['shutdown_menu'], 'record': 74}}
+        shutdown_record = next_record(shutdown_metadata)
         shutdown_state = install_shutdown_state(patch, record=shutdown_record,
-                                               owner_offset=state_start + len(custom) * 468,
                                                choices=[{'selection_id': row['selection_id'], 'native_id': row['native_id']}
                                                         for row in shutdown_plan['presets']],
                                                legacy_choices=shutdown_plan.get('legacy_choices', {}))
         shutdown_symbols = {key: int(value, 16) for key, value in shutdown_state['symbols'].items()}
-        prior_initialize = initialize
-        initialize = patch.append(lambda at: [0xE92D4010, 0xE1A04000,
-                                    _branch(at + 8, prior_initialize, link=True),
-                                    0xE1A00004, _branch(at + 16, shutdown_symbols['shutdown_initialize_owner'], link=True),
-                                    0xE8BD8010], 16)
         jpeg_table = install_jpeg_table(patch, shutdown_plan)
         shutdown_menu = install_shutdown_menu(patch, shutdown_symbols['shutdown_get'], shutdown_symbols['shutdown_set'],
                                              shutdown_symbols['shutdown_save_global'],
@@ -1165,7 +1166,10 @@ def apply_filter_registry(rtos, icon_bytes, filters, prior_filters, *, baseline_
                                                       for row in shutdown_plan['presets']],
                                              factory_preview_icons=factory_preview_icons)
         shutdown_report = menu_metadata(shutdown_plan, jpeg_table, shutdown_state, shutdown_menu, shutdown_previews)
-        shutdown_extra = OWNER_BYTES
+        if shutdown_metadata is not metadata:
+            shutdown_report['record_migration'] = {
+                'source_record': 73, 'record': shutdown_record,
+                'camera_selection_migrated': False, 'missing_record_default': 0}
     soft_glow_report = None
     soft_glow_extra = 0
     if soft_glow_plan and soft_glow_plan['enabled']:

@@ -91,6 +91,7 @@ def read_crops(rtos):
         order = layout['order']
         evidence.update(layout)
         from .demo_build import _metadata, supports_image
+        from .slots import supports_image as supports_filter_image
         metadata = _metadata(rtos) or {}
         crop_metadata = metadata.get('crop_compiler') == 'native-crops-v1'
         archived = {row['identity']['public_id']: row for row in metadata.get('crop_registry', [])}
@@ -162,7 +163,8 @@ def read_crops(rtos):
         evidence.update(native_readback='passed', model_branches=list(mags),
                         detected_custom_count=sum(row['kind'] == 'custom' for row in rows),
                         raw_recut_complete=not any(item['diagnostics'] for row in rows for item in row['raw_development']),
-                        compiler_supported=supports_image(rtos), crop_compiler=metadata.get('crop_compiler'),
+                        compiler_supported=supports_image(rtos) or supports_filter_image(rtos),
+                        crop_compiler=metadata.get('crop_compiler'),
                         next_public=metadata.get('crop_next_public', max([6, *order]) + 1))
     except Exception as exc:
         evidence['reason'] = '裁切布局只能检查：' + str(exc)
