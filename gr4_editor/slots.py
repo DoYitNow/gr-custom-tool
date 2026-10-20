@@ -300,6 +300,26 @@ def _clone_scalar(patch, style, main_helper):
             "previous_style_dispatch_preserved": True}
 
 
+def _video_settings_summary_code(origin, identities):
+    """Read the movie selection for this summary; leave photo state untouched."""
+    identities = [row.get("identity", row) for row in identities]
+    entries = {"video_settings_getter": origin}
+    # Native movie getter only accepts native styles. Bypass that range check
+    # for registered styles in the movie's main row, retaining Custom1–3.
+    code = [0xE5D02514, 0xE3520000, 0, 0xE5D02515]
+    for row in identities:
+        code.extend((0xE3520000 | row["style_id"], 0x01A00002, 0x012FFF1E))
+    fallback = origin + len(code) * 4
+    code[2] = _branch(origin + 8, fallback, condition=1)
+    code.append(_branch(fallback, 0x5329D154))
+    entries["video_settings_icon"] = origin + len(code) * 4
+    for row in identities:
+        code.extend((0xE3510000 | row["style_id"],
+                     _mov(0, row["icon_id"], condition=0), 0x012FFF1E))
+    code.append(_branch(origin + len(code) * 4, 0x533971CC))
+    return code, entries
+
+
 def _identity_registry(patch, rows):
     """Generate every proven custom identity exit from one sorted registry."""
     origin = (BASE + len(patch.image) + 15) & ~15
@@ -369,31 +389,22 @@ def _identity_registry(patch, rows):
             emit(0xE3510000 | row["style_id"], _mov(0, row[field], condition=0), 0x012FFF1E)
         emit(0xE351000A)
         jump(resume)
-    # The .25 video summary has its own call site; keep its proven r1 check
-    # and UserData fallback, now covering the entire custom registry.
-    entries["video_settings_icon"] = origin + len(code) * 4
-    for row in identities:
-        emit(0xE3510000 | row["style_id"], _mov(0, row["icon_id"], condition=0))
-        jump(0x531B15D4, condition=0)
-    jump(0x5323F018, link=True)
-    emit(0xE5D02153)
-    for row in identities:
-        emit(0xE3520000 | row["style_id"], _mov(0, row["icon_id"], condition=0))
-        jump(0x531B15D4, condition=0)
-    emit(0xE1A00005)
-    jump(0x533971CC, link=True)
-    jump(0x531B15D4)
+    video_code, video_entries = _video_settings_summary_code(origin + len(code) * 4, identities)
+    code.extend(video_code)
+    entries.update(video_entries)
     if patch.append(code, 16) != origin:
         raise ValueError("注册表地址变化")
     sites = {"writer": 0x537DE474, "read_style": 0x537D575C, "read_property": 0x537D89B0,
              "property_to_style": 0x533A3820, "playback_icon": 0x533A6878,
              "playback_detail": 0x533A7624, "settings_icon": 0x531B0E94,
-             "menu_icon": 0x53380FAC, "menu_text": 0x5337F824, "video_settings_icon": 0x531B15D0}
+             "menu_icon": 0x53380FAC, "menu_text": 0x5337F824,
+             "video_settings_getter": 0x531B15C4, "video_settings_icon": 0x531B15D0}
     for name, site in sites.items():
-        patch.set_word(site, _branch(site, entries[name], link=name == "video_settings_icon"), "unified custom identity " + name)
+        patch.set_word(site, _branch(site, entries[name], link=name.startswith("video_settings_")), "unified custom identity " + name)
     return {"entries": {key: hex(value) for key, value in entries.items()}, "bytes": len(code) * 4,
             "identities": identities, "original_native_fallbacks_retained": True,
-            "raw_current24_cursor_fix_preserved": True, "video_summary25_fix_extended": True}
+            "raw_current24_cursor_fix_preserved": True, "video_summary25_fix_extended": True,
+            "video_summary_photo_fallback_removed": True}
 
 
 def sha(data):
