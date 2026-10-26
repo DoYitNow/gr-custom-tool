@@ -22,16 +22,27 @@ COMPARISONS = (
     (0x5383196C, 0x3AFFFFC6, 0xE1A00000, 'full', 'dsp'),
     (0x53831980, 0x3AFFFFC1, 0xE1A00000, 'full', 'sric'),
 )
+GATE120_ENTRY = 0x53858398
+FACTORY_GATE120_SHA256 = 'eb00f7aa620244443f36eb5314755a824856cd8b034f84bfc548e361ce7f4a96'
+COMPARISONS120 = tuple((GATE120_ENTRY + at - GATE_ENTRY, *row)
+                       for at, *row in COMPARISONS)
+
+
+def _profile(rtos):
+    if len(rtos) >= 0x45C and struct.unpack_from('<3I', rtos, 0x450) == (0x543B3100, 0x55000000, 0x58500):
+        return GATE120_ENTRY, FACTORY_GATE120_SHA256, COMPARISONS120
+    return GATE_ENTRY, FACTORY_GATE_SHA256, COMPARISONS
 
 
 def inspect_update_policy(rtos: bytes) -> dict:
     """Recognize a complete factory or allow-older gate; report other bytes."""
-    start = GATE_ENTRY - BASE
+    entry, factory_sha256, comparisons = _profile(rtos)
+    start = entry - BASE
     gate = bytes(rtos[start:start + GATE_BYTES])
     proof = {
         'schema_version': 1, 'status': 'unsupported', 'policy': 'unknown',
-        'installed': None, 'entry': hex(GATE_ENTRY), 'gate_bytes': GATE_BYTES,
-        'gate_sha256': sha256(gate).hexdigest(), 'comparison_count': len(COMPARISONS),
+        'installed': None, 'entry': hex(entry), 'gate_bytes': GATE_BYTES,
+        'gate_sha256': sha256(gate).hexdigest(), 'comparison_count': len(comparisons),
         'hardware': 'not_tested',
         'scope': 'Known RTOS version comparisons only; peripheral, flash and boot acceptance unverified',
     }
@@ -39,8 +50,8 @@ def inspect_update_policy(rtos: bytes) -> dict:
         return {**proof, 'reason': '固件缺少完整的版本比较函数'}
     normalized = bytearray(gate)
     states, patches = [], []
-    for address, original, relaxed, path, component in COMPARISONS:
-        offset = address - GATE_ENTRY
+    for address, original, relaxed, path, component in comparisons:
+        offset = address - entry
         word = struct.unpack_from('<I', gate, offset)[0]
         if word not in (original, relaxed):
             return {**proof, 'reason': f'版本比较指令无法识别: {address:#x}'}
@@ -50,7 +61,7 @@ def inspect_update_policy(rtos: bytes) -> dict:
                         'factory_word': hex(original), 'policy_word': hex(relaxed),
                         'effective_word': hex(word)})
     normalized_sha = sha256(normalized).hexdigest()
-    if normalized_sha != FACTORY_GATE_SHA256:
+    if normalized_sha != factory_sha256:
         return {**proof, 'normalized_gate_sha256': normalized_sha,
                 'reason': '版本比较函数与已验证的原厂指令不一致'}
     if any(states) and not all(states):
@@ -69,7 +80,7 @@ def apply_update_policy(rtos: bytes) -> tuple[bytes, dict]:
     if before['status'] != 'verified':
         raise ValueError(before['reason'])
     result = bytearray(rtos)
-    for address, _original, relaxed, _path, _component in COMPARISONS:
+    for address, _original, relaxed, _path, _component in _profile(rtos)[2]:
         struct.pack_into('<I', result, address - BASE, relaxed)
     output = bytes(result)
     proof = inspect_update_policy(output)
@@ -90,7 +101,7 @@ def remove_update_policy(rtos: bytes) -> tuple[bytes, dict]:
     if before['status'] != 'verified':
         raise ValueError(before['reason'])
     result = bytearray(rtos)
-    for address, original, _relaxed, _path, _component in COMPARISONS:
+    for address, original, _relaxed, _path, _component in _profile(rtos)[2]:
         struct.pack_into('<I', result, address - BASE, original)
     output = bytes(result)
     proof = inspect_update_policy(output)

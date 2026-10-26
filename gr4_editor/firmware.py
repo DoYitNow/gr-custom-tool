@@ -25,6 +25,17 @@ BASE = 0x53000000
 VERSION_RUNTIME = 0x53FE50F8
 VERSION_FALLBACK_MOVW = 0x53A78498
 VERSION_FALLBACK_MOV = 0x53A784BC
+STARTUP_LAYOUTS = {
+    (0x5437B640, 0x55000000, 0x57480): {
+        'family': (1, 11, 10), 'runtime_version': VERSION_RUNTIME,
+        'fallback_movw': VERSION_FALLBACK_MOVW, 'fallback_mov': VERSION_FALLBACK_MOV,
+    },
+    (0x543B3100, 0x55000000, 0x58500): {
+        'family': (1, 20, 10), 'runtime_version': 0x5401BDFC,
+        'runtime_records': (0x5401BCE0, 0x5401BDFC, 0x5401BF4C),
+        'fallback_movw': 0x53AA06AC, 'fallback_mov': 0x53AA06D0,
+    },
+}
 
 
 class FirmwareError(ValueError):
@@ -67,7 +78,20 @@ def _history_identity(digest: str) -> dict | None:
     """Identify the known official input without a private research archive."""
     if digest == 'a2f664dfca034059eb0fd6e18ab08684c326b4a034d85c164dad7e1ec9b5655f':
         return {'kind': 'official', 'version': '1.11.10.7'}
+    if digest == '7563d7e462f0c53b6ab2fbab7cdfbbb57151a41192ee82f4f3a2108f9d77650d':
+        return {'kind': 'official', 'version': '1.20.10.11'}
     return None
+
+
+def _product120_support(rtos):
+    """Recognize the product adapter without admitting research manifests."""
+    try:
+        from . import product120
+        if product120.supports_image(rtos):
+            return True, product120.metadata(rtos)
+    except (ImportError, AttributeError, ValueError, TypeError, KeyError, struct.error):
+        pass
+    return False, None
 
 
 @dataclass
@@ -114,7 +138,8 @@ class _Memory:
     def __init__(self, rtos: bytes):
         self.data = rtos
         self.source, self.destination, self.length = struct.unpack('<3I', self.read(BASE + 0x450, 12))
-        if (self.source, self.destination, self.length) != (0x5437B640, 0x55000000, 0x57480):
+        self.layout = STARTUP_LAYOUTS.get((self.source, self.destination, self.length))
+        if self.layout is None:
             raise FirmwareError('unknown startup data layout')
 
     def read(self, address: int, size: int) -> bytes:
@@ -147,14 +172,21 @@ def _component_versions(decoded: bytes, sections: list[dict], memory: _Memory) -
     dsp = decoded[cpu['start'] + 16:cpu['end']]
     sric_bytes = decoded[sric['start'] + 16:sric['end']]
     values = {
-        'runtime_cpu': memory.word(VERSION_RUNTIME),
+        'runtime_cpu': memory.word(memory.layout['runtime_version']),
         'dsp': struct.unpack_from('>I', dsp, 0x90)[0],
         'sric': struct.unpack_from('<I', sric_bytes, 0x83D4)[0],
     }
-    movw, mov = memory.word(VERSION_FALLBACK_MOVW), memory.word(VERSION_FALLBACK_MOV)
+    for index, address in enumerate(memory.layout.get('runtime_records', ())):
+        values[f'runtime_record_{index}'] = memory.word(address)
+    movw = memory.word(memory.layout['fallback_movw'])
+    mov = memory.word(memory.layout['fallback_mov'])
     if movw & 0xFFFFFF00 != 0xE3000A00 or mov & 0xFFFFFF00 != 0xE3A00000:
         raise FirmwareError('unknown CPU fallback version instructions')
-    values['fallback_cpu'] = 0x010B0000 | _half(movw)
+    major, minor, _ = memory.layout['family']
+    values['fallback_cpu'] = (major << 24) | (minor << 16) | _half(movw)
+    movt = memory.word(memory.layout['fallback_movw'] + 4)
+    if movt != 0xE3400000 | ((major << 8) | minor):
+        raise FirmwareError('unknown CPU fallback version high instruction')
     values['fallback_build'] = mov & 255
     if sum32(sric_bytes) != 0:
         raise FirmwareError('SRIC checksum is invalid')
@@ -208,7 +240,7 @@ def _load_bytes(candidate: bytes, path: Path | None = None) -> FirmwareImage:
             if project in (636, 650) and word != runtime:
                 raise FirmwareError('component metadata version differs from runtime')
         version = _version(runtime)
-        if version[:3] != (1, 11, 10):
+        if version[:3] != memory.layout['family']:
             raise FirmwareError('unsupported internal version family')
         digest = _sha(candidate)
         identity = _history_identity(digest)
@@ -241,11 +273,18 @@ def _load_bytes(candidate: bytes, path: Path | None = None) -> FirmwareImage:
         # whether crop/end-screen writes are available.  Keeping those two
         # capabilities separate avoids turning an unknown layout into a
         # falsely verified native patch target.
-        editable = True
+        if memory.layout['family'] == (1, 20, 10):
+            backend_verified, registry_metadata = _product120_support(rtos)
+            if registry_metadata is None and not (identity and identity.get('kind') == 'official'):
+                backend_verified = False
+            editable = backend_verified
+        else:
+            editable = True
         proof = {
             'container_checksum_valid': True, 'decoded_checksum_valid': True,
             'component_checksums_valid': True, 'component_versions_consistent': True,
             'startup_data_copy_valid': True, 'section_order_valid': True,
+            'layout_family': list(memory.layout['family']),
             'strict_stream_decode_valid': True, 'frames': len(frames),
             'versions': {k: _version_text(_version(v)) for k, v in {**values, **outer}.items() if k != 'fallback_build'},
             'fallback_build': values['fallback_build'], 'metadata_versions': metadata_versions,
@@ -255,7 +294,7 @@ def _load_bytes(candidate: bytes, path: Path | None = None) -> FirmwareImage:
             'compiler_base_rtos_sha256': ((registry_metadata.get('compiler_base_sha256', registry_metadata.get('base_rtos_sha256'))
                                           if registry_metadata else _sha(rtos)) if backend_verified else None),
             'hardware_flash_verified': False,
-            'generic_passthrough': not backend_verified,
+            'generic_passthrough': memory.layout['family'] == (1, 11, 10) and not backend_verified,
             'update_policy': inspect_update_policy(rtos),
         }
         return FirmwareImage(path, candidate, decoded, rtos, icon_bytes, sections, info,
@@ -278,7 +317,7 @@ def inspect_firmware(path: str | Path | FirmwareImage) -> dict:
         'path': str(image.path), 'sha256': image.sha256,
         'bytes': len(image.candidate), 'decoded_sha256': _sha(image.decoded),
         'rtos_sha256': _sha(image.rtos), 'internal_version': image.internal_version,
-        'version': list(image.version), 'public_version': '1.11',
+        'version': list(image.version), 'public_version': '.'.join(map(str, image.version[:2])),
         'history': image.history, 'known_stage_id': image.known_stage_id,
         'editable': image.editable, 'editability': image.editability,
         'sections': image.sections, 'layout_proof': image.layout_proof,
@@ -290,6 +329,15 @@ def inspect_firmware(path: str | Path | FirmwareImage) -> dict:
 def _immediate(word: int) -> int:
     value, rotate = word & 255, ((word >> 8) & 15) * 2
     return ((value >> rotate) | (value << (32 - rotate))) & 0xFFFFFFFF if rotate else value
+
+
+def read_filters(image: FirmwareImage) -> list[dict]:
+    """Dispatch native resource reads by the verified startup layout."""
+    if _Memory(image.rtos).layout['family'] == (1, 20, 10):
+        from .product120 import read_filters120
+        return read_filters120(image)
+    from .filter_reader import read_filters as read_filters111
+    return read_filters111(image)
 
 
 
@@ -364,6 +412,20 @@ def _rebuild_decoded(image: FirmwareImage, replacements: dict[str, bytes]) -> by
 
 
 def _patch_rtos_version(rtos: bytes, old: int, new: int) -> bytes:
+    if _version(old)[:3] != _version(new)[:3]:
+        raise FirmwareError('version changes cannot switch firmware layout family')
+    if _version(old)[:3] == (1, 20, 10):
+        layout = next(value for value in STARTUP_LAYOUTS.values() if value['family'] == (1, 20, 10))
+        sites = [(address, old, new) for address in layout['runtime_records']]
+        sites += [(layout['fallback_movw'], 0xE3000A00 | (old & 255), 0xE3000A00 | (new & 255)),
+                  (layout['fallback_mov'], 0xE3A00000 | (old & 255), 0xE3A00000 | (new & 255))]
+        out = bytearray(rtos)
+        for address, before, after in sites:
+            offset = address - BASE
+            if not 0 <= offset <= len(out) - 4 or struct.unpack_from('<I', out, offset)[0] not in (before, after):
+                raise FirmwareError(f'caller changed a version instruction unexpectedly: {address:#x}')
+            struct.pack_into('<I', out, offset, after)
+        return repair_last_word(bytes(out)) if out[-16:-8] == b'GR4P1201' else bytes(out)
     out = bytearray(rtos)
     for address, before, after in (
         (VERSION_RUNTIME, struct.pack('<I', old), struct.pack('<I', new)),
@@ -490,13 +552,16 @@ def repack_image(image: FirmwareImage, new_rtos: bytes, new_icon_bytes: bytes | 
         raise FirmwareError('FirmwareImage source bytes changed after import')
     old = int.from_bytes(bytes(image.version), 'big')
     new = old if new_version is None else _version_word(new_version)
-    if _version(new)[:3] != (1, 11, 10):
-        raise FirmwareError('this adapter only rebuilds the 1.11.10.x family')
+    if _version(new)[:3] != image.version[:3]:
+        raise FirmwareError('version changes cannot switch firmware layout family')
     if new < old:
         raise FirmwareError('output version cannot be lower than imported firmware')
     if type(allow_older) is not bool:
         raise ValueError('低版本固件支持开关必须是布尔值')
-    from .demo_build import prepare_update_policy
+    if image.version[:3] == (1, 20, 10):
+        from .product120 import prepare_update_policy
+    else:
+        from .demo_build import prepare_update_policy
     source_policy = inspect_update_policy(image.rtos)
     policy_rtos, policy_installation = prepare_update_policy(new_rtos, allow_older=allow_older)
     target_rtos = _patch_rtos_version(policy_rtos, old, new)
@@ -567,5 +632,6 @@ def repack_image(image: FirmwareImage, new_rtos: bytes, new_icon_bytes: bytes | 
         'fresh_history_roundtrip_exact': True, 'hardware_flash_verified': False,
         'requires_local_state_manifest_for_future_editing': not bool(
             verified.layout_proof.get('editor_registry_verified') and
-            (verified.layout_proof.get('editor_registry_schema_version') or 0) >= 2),
+            (verified.version[:3] == (1, 20, 10) or
+             (verified.layout_proof.get('editor_registry_schema_version') or 0) >= 2)),
     }

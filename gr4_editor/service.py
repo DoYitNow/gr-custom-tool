@@ -13,6 +13,7 @@ from .store import Store, sha256, timestamp, write_json
 from .update_policy import inspect_update_policy
 from .versions import allocate_version, version_text, version_word
 from .xmp_editor import XmpEditorMixin, _filter_backend
+from .multiversion import MultiVersionEditorMixin
 
 EDITION = "demo-crop-shutdown"
 
@@ -44,7 +45,7 @@ def _build_options(value=None, fallback=True):
     raise ValueError("低版本固件支持开关必须是布尔值")
 
 
-class Editor(XmpEditorMixin):
+class _LegacyEditor(XmpEditorMixin):
     def __init__(self, root=DATA_ROOT):
         self.store = Store(root)
         self._input_version_cache = {}
@@ -586,3 +587,7 @@ class Editor(XmpEditorMixin):
                 "working_tree_dirty": changed,
                 "python_version": sys.version,
                 "executed_editor_files": {str(path.relative_to(PROJECT_ROOT)).replace("\\", "/"): sha256(path.read_bytes()) for path in paths if path.is_file()}}
+
+
+class Editor(MultiVersionEditorMixin, _LegacyEditor):
+    """Version-aware service using the existing 1.11 implementation."""

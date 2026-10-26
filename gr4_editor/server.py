@@ -99,7 +99,11 @@ def make_handler(editor):
                     return self.response(403, {"error": "请从本地编辑器页面操作"})
                 raw = self.body()
                 if path == "/api/import":
-                    return self.response(200, editor.import_firmware(raw, query.get("name", "fwdc248b.bin")))
+                    return self.response(200, editor.import_firmware(raw, query.get("name", "fwdc248b.bin"),
+                                                                    expected_family=query.get("family", "auto")))
+                if path == "/api/upgrade":
+                    return self.response(200, editor.upgrade_firmware(query["project_id"], raw,
+                                                                     query.get("name", "fwdc248b.bin")))
                 if path == "/api/xmp":
                     return self.response(200, editor.import_xmp(query["project_id"], query["filter_id"], raw,
                                                                 query.get("name", "preset.xmp"),
@@ -115,7 +119,8 @@ def make_handler(editor):
                     result = editor.save(data["project_id"], data.get("title"), crops=data.get("crops"),
                                          shutdown=data.get("shutdown"),
                                          update_policy_draft=data.get("update_policy_draft"),
-                                         build_options=data.get("build_options"), filters=data.get("filters"))
+                                         build_options=data.get("build_options"), filters=data.get("filters"),
+                                         native_effects_draft=data.get("native_effects_draft"))
                 elif path == "/api/add-filter":
                     result = editor.add_filter(data["project_id"], data["template_id"], data.get("name"))
                 elif path == "/api/remove-filter":

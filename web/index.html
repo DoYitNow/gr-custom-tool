@@ -18,6 +18,7 @@
   <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
   <main id="editor-workspace" class="workspace">
     <input id="firmware-file" type="file" accept=".bin,application/octet-stream" hidden>
+    <input id="upgrade-firmware-file" type="file" accept=".bin,application/octet-stream" hidden>
     <input id="project-file" type="file" accept=".json,application/json" hidden>
     <aside class="sidebar panel">
       <nav class="function-nav" aria-label="编辑功能">
@@ -29,6 +30,7 @@
         <div class="section-heading"><h2>影像控制 <span id="filter-count" class="count">0</span></h2><button id="add-filter" class="icon-button" type="button" aria-label="新增滤镜" disabled>＋</button></div>
         <label class="search"><span aria-hidden="true">⌕</span><input id="filter-search" type="search" placeholder="搜索滤镜" aria-label="搜索滤镜" disabled></label>
         <div id="filter-list" class="filter-list" aria-label="滤镜列表"><p class="list-empty">暂无滤镜</p></div>
+        <div id="native-effects-controls" class="native-effects-controls" hidden><label class="toggle"><input id="pictorialist-toggle" type="checkbox" disabled aria-describedby="pictorialist-note"><span class="toggle-track"></span><span>画意摄影（实验）</span></label><p id="pictorialist-note" class="field-help">原厂尚未开放。此开关仅控制原生滤镜入口，不代表已验证特殊成像效果。</p></div>
       </section>
       <section id="crop-section" class="filter-section" hidden>
         <div class="section-heading"><h2>裁切比例 <span id="crop-count" class="count">0</span></h2><button id="add-crop" class="button small secondary" type="button" disabled>新增比例</button></div>
@@ -90,7 +92,7 @@
       </div>
     </section>
     <aside class="firmware-rail" aria-label="固件与生成">
-      <section id="source-summary" class="source-summary panel" aria-label="当前固件"><h2>当前固件</h2><h1 id="source-meta">未载入</h1><p id="source-name" class="muted"></p><span id="source-sha" class="mono muted"></span><div class="source-actions"><button id="import-firmware" class="button secondary full" type="button">导入固件</button><button id="resume-edit" class="button quiet full" type="button" hidden>继续上次编辑</button></div></section>
+      <section id="source-summary" class="source-summary panel" aria-label="当前固件"><h2>当前固件</h2><h1 id="source-meta">未载入</h1><p id="source-name" class="muted"></p><span id="source-sha" class="mono muted"></span><div class="firmware-family-field"><label class="field-label" for="firmware-family">导入固件版本</label><select id="firmware-family" class="text-input"><option value="auto">自动识别</option><option value="1.11">1.11</option><option value="1.20">1.20</option></select><p id="firmware-family-current" class="field-help" hidden></p></div><div class="source-actions"><button id="import-firmware" class="button secondary full" type="button">导入固件</button><button id="resume-edit" class="button quiet full" type="button" hidden>继续上次编辑</button><button id="upgrade-firmware" class="button secondary full" type="button" hidden>一键迁移到 1.20</button></div><p id="upgrade-firmware-note" class="field-help" hidden>选择官方 1.20 BIN，迁移当前背景、裁切和滤镜到新编辑记录，再检查并生成固件。原 1.11 编辑记录保留。</p><p id="firmware-migration-info" class="field-help" role="status" hidden></p></section>
       <section id="build-panel" class="build-panel panel" hidden>
         <h2>生成新固件</h2>
         <input id="project-title" type="text" hidden>

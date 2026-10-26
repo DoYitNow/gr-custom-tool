@@ -459,6 +459,11 @@ a:hover { color: #62676b; }
 .source-summary .muted { display: block; margin-top: 5px; overflow-wrap: anywhere; }
 .source-summary > .mono { margin-top: 10px; }
 .source-actions { display: flex; flex-direction: column; gap: 6px; margin-top: 18px; }
+.firmware-family-field { margin-top: 16px; }
+.firmware-family-field .text-input { width: 100%; }
+.firmware-family-field .field-help { margin-bottom: 0; }
+.native-effects-controls { margin-top: 14px; padding-top: 14px; border-top: 1px solid #e5e6e7; }
+.native-effects-controls .field-help { margin-bottom: 0; }
 .editor { display: flex; flex-direction: column; }
 .editor > #editor-content, .editor > #crop-editor, .editor > #shutdown-editor { flex: 1; }
 .build-panel { margin: 0; }

@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-26",
+  "source_commit": "eba84a9fd3c9e35c1f329deeda93d368e6a97a2a",
+  "source_ref": "refs/heads/codex/editor120-source-20261026",
+  "public_base_commit": "6fe16a6eacf3a27fc69d34fbeb600ecb9cb90a5b",
+  "export_profile": "release_profiles.public_1_20",
+  "features": [
+    "shutdown",
+    "crops",
+    "filters",
+    "pictorialist_switch",
+    "configuration_migration"
+  ],
+  "checks": [
+    {
+      "path": "docs/FIRMWARE_FAMILIES.md",
+      "sha256": "8e76139e2996a2c64b240cae34e16cbc0342591b25880c249708c260f98cd8cc",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/crop120.py",
+      "sha256": "f1418ebb86c75d5b2bbb61655a4c379ca9f70da02ee2f699b5042d923f13caef",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/crop120_identity.py",
+      "sha256": "24b52738eb4c61a1f01b4528e0be4edd4404c817a86cd949b38c56656a685beb",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/crop120_menu.py",
+      "sha256": "474979e76d37d20a2823ec8a3cf1763b806b13a711f6522c6a04b4987c41114e",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/crop120_raw.py",
+      "sha256": "086d539282307cd9d20cbe779d8ce4517d707c480db170061184c007a54652b5",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/crop120_state.py",
+      "sha256": "98b2d826ce3be8f124daa1a8753e4da0f87b60cfbc248b984957b46b6dc3c2b2",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/filter120.py",
+      "sha256": "0994a460aabee193ba6109917eb9ea5035efeef09622c2a3f65bc0410351d9d1",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/layout120_userdata.py",
+      "sha256": "7a9c51d3cc9d28745074a6b1d5596b77c7f795bb9cd7b497baac868add4e9a83",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/migration120.py",
+      "sha256": "b614dc7ebcb44afd3e9eb9299ced1d1c95ed36859a7c4cc05ceda49f3876f23e",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/mono_effects120.py",
+      "sha256": "81f7ebec9a0a24f1211b2f344924c61427db42f9f99a170556a49ab648854a6f",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/multiversion.py",
+      "sha256": "4fc6dba2e69a48b3d4836219e47d1410116919780a7f415d51fbe73214eaf225",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/namespace120.py",
+      "sha256": "1026639692071433fdf33176e3e19467876e80e47f260a4934b92f8514fc9660",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/native/namespace120.c",
+      "sha256": "36c446fc34fb44b965f76bde6f1fc1c53500a9a33bc0b4c82a8962f2a853e6d0",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/native/shutdown120.c",
+      "sha256": "f61f34fbb5dd360a3e8284e9928f8e3b161400404a79ea0db3767b1e2ec95f46",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/native120.py",
+      "sha256": "54950bed07b04adf84a51aa9464ba91e514afe86a7f9bdf03746b447670d0fcd",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/native_raw120.py",
+      "sha256": "44f19dc637f884187bf68b55e0579025326051d9e1c36c2790402c73921ec2d3",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/official_scalar.py",
+      "sha256": "33cd41304da95ba51187d4b6da023eba9f9d115f48b42803d2dcd516711ed5c8",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/product120.py",
+      "sha256": "ec0953098ff754a514ef9082f6e6472188b4c2c86964d991caf951fd15b0bf5c",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/product120_crops.py",
+      "sha256": "df6170a8f2dd038db61d8450b070aaa5907b66cf2582fdae5739674a6cbe9ac5",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/product120_resources.py",
+      "sha256": "ea55652398938f526232b2ff7e51948f7a3828a070d8adf0fa89ffff64a284a3",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/registry120.py",
+      "sha256": "2faf235957c58576ac40219fb72ee7517dd8ed5c6fca08b7eb189f5e62c125ff",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/resources120.py",
+      "sha256": "2ccdddb05c02caefd44d242c528013df9be365a265a467556f7832348dd2015d",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/scalar120.py",
+      "sha256": "8774b3a3e529fc49dbbaae178a83335cf905cecfd8f21d9ecedef0c2d7ce72d2",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/shutdown120.py",
+      "sha256": "58a6d6aacb2dd316f8a5fd08c78c5a6b8c90543600f6dd94880302ab47f9ccbc",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/usermode120.py",
+      "sha256": "b7cc6f58aaf3ffe421fa74b7ebb6b2a3396803fe0a7a61a2b9e0605415efa2ea",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "tests/fixtures/web_families_probe.cjs",
+      "sha256": "881905d72f1378d0634676a87b5396d0460c4a711b099d1ad8fe7c5499bf1352",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "tests/test_crop120_legacy5.py",
+      "sha256": "11439b3fdce858e61aec5fb4ede6ed340cfef1f68bb08be88cbcfbadf4902eb5",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "tests/test_fitting120_context.py",
+      "sha256": "922b6a27f33b06d67a895176da88bcb35c14fd46103ea5bce4dace3a6f31a818",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "tests/test_migration120.py",
+      "sha256": "b599e4baacbd685a28a264b9dd2a408f7fcc37cf942793ddca53375314bec211",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "tests/test_mixin_mro.py",
+      "sha256": "fb359affbdc616ac0c845fc3de5c836490a2f442abb20cae0e7a6e1ac750b514",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "tests/test_product120.py",
+      "sha256": "29e10c308ad36a202e1f0a6aeaa965c3e41cc61c22c14ee4440889e2e5ed5326",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "tests/test_product120_menu_validation.py",
+      "sha256": "263411b6096c8972de8f889a02b40e60e74e3a97849c992690caa04ea5dfd39a",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "tests/test_product120_project_context.py",
+      "sha256": "4924a42d9fd401d2c3a9d11a52c0d41f02c99ce125731ddfa4686cd088ae0304",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "tests/test_public_firmware120.py",
+      "sha256": "b30f04ffce60fe4f933166f8022e439b86dc2d796a94c8a95c561d42556d1fe2",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "tests/test_versioned_native_hooks.py",
+      "sha256": "72dd3fee435da1851da5c9633047c37e90db8886ca77909b68184ffa51407e73",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "tests/test_web_families.py",
+      "sha256": "6731e2718ee2eb2ea5f10ffcafea37c64717ba5c31b709eb942670ac1644944d",
+      "mode": "exact selected source blob"
+    },
+    {
+      "path": "gr4_editor/slots.py",
+      "function": "_compile_state",
+      "ast_sha256": "e0b529d1eeff9cabed5811f9238896ce50db7b2bf81fc04e757152153b4b5902",
+      "mode": "selected function; other public functions retained"
+    },
+    {
+      "path": "gr4_editor/slots.py",
+      "function": "_clone_scalar",
+      "ast_sha256": "f1cd7838d857df28023fd46521eb1550365ffc48ae5c0a6dd9dc0b70680bf492",
+      "mode": "selected function; other public functions retained"
+    },
+    {
+      "path": "gr4_editor/firmware.py",
+      "sha256": "113b686438693f1af5108eaf7c799becb46327475ddf43e1dab6dddbc5b881bd",
+      "mode": "reviewed public integration; existing edition retained"
+    },
+    {
+      "path": "gr4_editor/server.py",
+      "sha256": "327bbdc094a06715547d86918eaf71b1452e0304641205fd2018dd4b7fe42816",
+      "mode": "reviewed public integration; existing edition retained"
+    },
+    {
+      "path": "gr4_editor/service.py",
+      "sha256": "fdc1a6efa591fcb10d8567f2c3ebb332725c34e82f24e8073e911d06e905021b",
+      "mode": "reviewed public integration; existing edition retained"
+    },
+    {
+      "path": "gr4_editor/fitting.py",
+      "sha256": "7a140c346928b519b41391a1c91ba8d246ac01fdcf5e77cac894c297589e7a0e",
+      "mode": "reviewed public integration; existing edition retained"
+    },
+    {
+      "path": "gr4_editor/update_policy.py",
+      "sha256": "aaadb22b6774e0f1859c22020ea4bd35baa73962fb04d5bac0e15ed2af16b28f",
+      "mode": "reviewed public integration; existing edition retained"
+    },
+    {
+      "path": "gr4_editor/versions.py",
+      "sha256": "034465fe906e3333e350a023f5f579746d2ce960cf2b43d78528311efd3d6592",
+      "mode": "reviewed public integration; existing edition retained"
+    },
+    {
+      "path": "web/index.html",
+      "sha256": "9ef5cb2f819a500a1d249a37162a475f39ade3759e744dd46240b23c8158e84e",
+      "mode": "reviewed public integration; existing edition retained"
+    },
+    {
+      "path": "web/app.js",
+      "sha256": "68f34412d614db4eea710a9c5ba0f56c45d9bcd9c83b7a685b5cc376f25184a5",
+      "mode": "reviewed public integration; existing edition retained"
+    },
+    {
+      "path": "web/styles.css",
+      "sha256": "cda9bb8bea8373956e967b0edae872a0e956a8302368635a2eea704ec31672b5",
+      "mode": "reviewed public integration; existing edition retained"
+    }
+  ],
+  "research_history_exported": false,
+  "remote_pushed": false,
+  "hash_newline_policy": "LF, matching the committed Git text blobs"
+}

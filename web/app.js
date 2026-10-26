@@ -29,14 +29,39 @@ function uiText(value) {
   const cleaned = text.replace(/[ \t]{2,}/g, " ").replace(/^[\s_-]+|[\s_-]+$/g, "");
   return /^\.[^.\s]+$/.test(cleaned) ? "固件" + cleaned : cleaned;
 }
+function firmwareFamily(value = state.project?.input) {
+  const text = typeof value === "string" ? value : value?.family || value?.firmware_family || value?.version || "";
+  return /^(1\.(?:11|20))(?:\.|$)/.exec(String(text))?.[1] || null;
+}
 function rollbackSuggestedVersion(target) {
+  const family = firmwareFamily() || firmwareFamily(target.version);
+  if (!family) return "";
   const suffix = value => {
-    const match = /^1\.11\.10\.(\d{1,3})$/.exec(String(value || ""));
-    return match && Number(match[1]) <= 255 ? Number(match[1]) : null;
+    const match = /^(1\.(?:11|20))\.10\.(\d{1,3})$/.exec(String(value || ""));
+    return match && match[1] === family && Number(match[2]) <= 255 ? Number(match[2]) : null;
   };
   const versions = [state.project?.input.version, target.version, ...(state.history?.nodes || []).map(node => node.version)].map(suffix).filter(value => value !== null);
   const next = Math.max(suffix(state.project?.suggested_version) || 0, ...versions.map(value => value + 1));
-  return next > 0 && next <= 255 ? `1.11.10.${next}` : "";
+  return next > 0 && next <= 255 ? `${family}.10.${next}` : "";
+}
+function renderFirmwareControls() {
+  const project = state.project; const family = firmwareFamily();
+  const supported = state.status?.supported_families || ["1.11", "1.20"];
+  for (const option of $("firmware-family").options) option.disabled = option.value !== "auto" && !supported.includes(option.value);
+  $("firmware-family-current").textContent = family ? `当前基于 ${family}` : "";
+  $("firmware-family-current").hidden = !family;
+  const canUpgrade = family === "1.11" && supported.includes("1.20");
+  $("upgrade-firmware").hidden = !canUpgrade;
+  $("upgrade-firmware").disabled = !project || !(project.capabilities?.can_build ?? project.can_generate);
+  $("upgrade-firmware-note").hidden = !canUpgrade;
+  const migration = project?.migration;
+  const source = migration?.source_version || migration?.source?.version || migration?.source_family || "1.11";
+  $("firmware-migration-info").textContent = migration ? `已迁移：${source} → ${project.input.version}。原编辑记录保留，请检查各项设置。` : "";
+  $("firmware-migration-info").hidden = !migration;
+  const pictorialist = project?.capabilities?.pictorialist_switch === true;
+  $("native-effects-controls").hidden = !pictorialist;
+  $("pictorialist-toggle").checked = project?.native_effects_draft?.pictorialist === true;
+  $("pictorialist-toggle").disabled = !pictorialist || !(project?.capabilities?.can_build ?? project?.can_generate);
 }
 function switchView(view) {
   $("editor-workspace").hidden = false;
@@ -148,6 +173,7 @@ function acceptProject(project) {
   project.shutdown ||= { schema_version: 2, assets: [], items: [], selected_item_id: null };
   project.shutdown.assets ||= [];
   project.shutdown.items ||= [];
+  project.native_effects_draft ||= { schema_version: 1, pictorialist: false };
   state.allowOlder = project.build_options?.allow_older !== false;
   if (!project.shutdown.items.some(row => row.id === state.selectedShutdown)) state.selectedShutdown = null;
   state.project = project;
@@ -168,11 +194,13 @@ async function saveDraft() {
   acceptProject(await request("/api/project", {
     project_id: state.project.id, title: $("project-title").value,
     crops: state.project.crops, shutdown: state.project.shutdown, filters: state.project.filters,
+    native_effects_draft: state.project.native_effects_draft,
     build_options: { allow_older: $("allow-older").checked },
   }));
 }
 async function refreshStatus() {
   [state.status, state.settings] = await Promise.all([request("/api/status"), request("/api/settings")]);
+  renderFirmwareControls();
   const records = state.status.projects || []; const projects = $("local-projects");
   projects.replaceChildren(new Option("选择记录", ""));
   for (const project of records) {
@@ -619,6 +647,7 @@ function renderHistory() {
 
 function render() {
   renderHistoryBaseline();
+  renderFirmwareControls();
   if (!state.project) return;
   $("resume-edit").hidden = true;
   const project = state.project;
@@ -641,9 +670,22 @@ $("import-firmware").onclick = () => { $("firmware-file").value = ""; $("firmwar
 $("firmware-file").onchange = () => operation("导入固件…", async () => {
   const file = $("firmware-file").files[0]; if (!file) return;
   await saveDraft();
-  acceptProject(await request("/api/import?name=" + encodeURIComponent(file.name), await file.arrayBuffer(), true), null);
+  acceptProject(await request("/api/import?name=" + encodeURIComponent(file.name) + "&family=" + encodeURIComponent($("firmware-family").value), await file.arrayBuffer(), true), null);
   switchView("editor"); await refreshStatus(); notice("固件已导入"); $("firmware-file").value = "";
 });
+$("upgrade-firmware").onclick = () => { $("upgrade-firmware-file").value = ""; $("upgrade-firmware-file").click(); };
+$("upgrade-firmware-file").onchange = () => operation("迁移客制功能到 1.20…", async () => {
+  const file = $("upgrade-firmware-file").files[0]; if (!file || firmwareFamily() !== "1.11") return;
+  await saveDraft();
+  const project = await request("/api/upgrade?project_id=" + encodeURIComponent(state.project.id) + "&name=" + encodeURIComponent(file.name), await file.arrayBuffer(), true);
+  acceptProject(project, null); switchView("editor"); await refreshStatus();
+  notice("已迁移到新的 1.20 编辑记录，请检查后生成固件"); $("upgrade-firmware-file").value = "";
+});
+$("pictorialist-toggle").onchange = () => {
+  if (!state.project || state.project.capabilities?.pictorialist_switch !== true) return;
+  state.project.native_effects_draft = { schema_version: 1, pictorialist: $("pictorialist-toggle").checked };
+  dirty();
+};
 $("open-drafts").onclick = () => { $("more-menu").open = false; $("draft-dialog").showModal(); };
 $("load-draft").onclick = () => operation("载入已保存的编辑…", async () => {
   const id = $("local-projects").value; if (!id) throw new Error("请选择编辑记录");

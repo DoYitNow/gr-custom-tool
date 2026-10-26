@@ -137,14 +137,18 @@ def _native_context(backend, job) -> tuple[dict, Any, list[dict]]:
     curve, gamma_dependency = load_gamma_base()
     from . import firmware
     _Memory, load_image = firmware._Memory, firmware.load_image
-    _color_resources = getattr(firmware, '_color_resources', None)
-    if _color_resources is None:
-        from .filter_reader import _color_resources
     image = load_image(job['firmware_path'])
     if job.get('firmware_sha256') and image.sha256 != job['firmware_sha256']:
         raise ValueError('校色任务的输入文件哈希已变化')
     memory = _Memory(image.rtos)
-    bank = _color_resources(memory, 11)['banks'][0]
+    if getattr(image, 'internal_version', '').startswith('1.20.'):
+        from .product120_resources import color120
+        bank = color120(memory, 11)['banks'][0]
+    else:
+        _color_resources = getattr(firmware, '_color_resources', None)
+        if _color_resources is None:
+            from .filter_reader import _color_resources
+        bank = _color_resources(memory, 11)['banks'][0]
     descriptor = bytes.fromhex(bank['descriptor_hex']['multi_axial'])
     native, sources = {}, {}
     for offset, size, fmt in ((0, 32, '<16H'), (4, 20, '<20B'), (16, 42, '<21H'), (20, 18, '<9H')):

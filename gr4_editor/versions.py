@@ -1,9 +1,10 @@
 # Copyright (C) 2026 DoYitNow
 # SPDX-License-Identifier: GPL-2.0-only
 
-"""Allocate supported internal versions for the demo candidate family."""
+"""Allocate supported internal versions independently of filter identities."""
 
 FAMILY = (1, 11, 10)
+SUPPORTED_FAMILIES = (FAMILY, (1, 20, 10))
 FIRST_GENERATED_BUILD = 10
 
 
@@ -35,24 +36,25 @@ def version_word(value):
     return result
 
 
-def recorded_versions(ledger=()):
+def recorded_versions(ledger=(), *, family=FAMILY):
     """Use this user's records; internal research history is not a version floor."""
     values = [parse_version(row["version"]) for row in ledger if row.get("version")]
-    return [value for value in values if value[:3] == FAMILY]
+    return [value for value in values if value[:3] == family]
 
 
 def allocate_version(source, ledger=(), requested=None):
     source = parse_version(source)
-    if source[:3] != FAMILY:
-        raise ValueError("目前只支持 1.11.10.* 内部版本；跨版本布局需单独适配")
-    used = recorded_versions(ledger)
+    family = source[:3]
+    if family not in SUPPORTED_FAMILIES:
+        raise ValueError("版本编号仅支持 1.11.10.* 和 1.20.10.*；固件布局支持由对应适配器验证")
+    used = recorded_versions(ledger, family=family)
     # Reserve the lower official/App range, then increment the local maximum.
     minimum = max([FIRST_GENERATED_BUILD - 1, source[3]] + [value[3] for value in used]) + 1
     if minimum > 255:
         raise ValueError("当前版本第四段已满，不能未经适配自动进位")
-    value = FAMILY + (minimum,)
+    value = family + (minimum,)
     if requested is not None:
         value = parse_version(requested)
-        if value[:3] != FAMILY or value[3] < minimum:
-            raise ValueError(f"版本号必须不低于 {version_text(FAMILY + (minimum,))}")
+        if value[:3] != family or value[3] < minimum:
+            raise ValueError(f"版本号必须不低于 {version_text(family + (minimum,))}")
     return version_text(value)

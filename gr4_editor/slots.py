@@ -140,7 +140,8 @@ def _toolchain():
     return toolchain()
 
 
-def _compile_state(patch, rows, layouts):
+def _compile_state(patch, rows, layouts, *, address_profile=None, native_overrides=None,
+                   original_save_body=None, original_load_body=None):
     clang, objcopy, nm = _toolchain()
     slot_rows = []
     for row in rows:
@@ -151,12 +152,21 @@ def _compile_state(patch, rows, layouts):
                          (hex(layout["main_offset"]), hex(layout["mirror_offset"]), hex(layout["shadow_offset"]), layout["record"], style, ",".join(map(str, encoded))))
     source = "#define SLOT_COUNT %d\n#define SLOT_ROWS %s\n" % (len(rows), ",".join(slot_rows))
     source += (Path(__file__).parent / "native/registry_state.c").read_text(encoding="utf-8")
+    source_bindings = None
+    if address_profile is not None:
+        from .native120 import render_native_text
+        source, source_bindings = render_native_text(source, address_profile, literal_overrides=native_overrides)
+        if original_save_body is None or original_load_body is None:
+            raise ValueError('versioned state compiler requires explicit verified native save/load bodies')
+    elif native_overrides or original_save_body is not None or original_load_body is not None:
+        raise ValueError('versioned state bindings require an explicit native address profile')
     origin = (BASE + len(patch.image) + 15) & ~15
     with tempfile.TemporaryDirectory(prefix="gr4-registry-") as temporary:
         directory = Path(temporary)
         c, ld, elf, binary = (directory / name for name in ("state.c", "state.ld", "state.elf", "state.arm"))
         c.write_text(source, encoding="utf-8")
-        ld.write_text("original_save_body = 0x533E1C08; original_load_body = 0x533E17D0; SECTIONS { . = %s; .text : { *(.text*) *(.rodata*) } /DISCARD/ : { *(.ARM.exidx*) *(.ARM.extab*) *(.comment*) } }" % hex(origin), encoding="ascii")
+        ld.write_text("original_save_body = %s; original_load_body = %s; SECTIONS { . = %s; .text : { *(.text*) *(.rodata*) } /DISCARD/ : { *(.ARM.exidx*) *(.ARM.extab*) *(.comment*) } }" %
+                      (hex(original_save_body or 0x533E1C08), hex(original_load_body or 0x533E17D0), hex(origin)), encoding="ascii")
         command = [str(clang), *linker_flags(clang), "-target", "armv7-none-eabi", "-mcpu=cortex-a9", "-marm", "-mfloat-abi=soft", "-Os", "-ffreestanding", "-fno-builtin", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables", "-nostdlib", "-Wl,-T," + str(ld), "-Wl,--entry=registry_load", str(c), "-o", str(elf)]
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode:
@@ -169,7 +179,10 @@ def _compile_state(patch, rows, layouts):
         blob = binary.read_bytes()
     if patch.append(blob, 16) != origin:
         raise ValueError("ARM 状态地址变化")
-    return symbols, {"address": hex(origin), "bytes": len(blob), "sha256": sha(blob), "source_sha256": sha(source.encode()), "symbols": {key: hex(value) for key, value in symbols.items()}}
+    report = {"address": hex(origin), "bytes": len(blob), "sha256": sha(blob), "source_sha256": sha(source.encode()), "symbols": {key: hex(value) for key, value in symbols.items()}}
+    if source_bindings is not None:
+        report['native_bindings'] = source_bindings
+    return symbols, report
 
 
 def _install_state(patch, rows, layouts):
@@ -211,7 +224,7 @@ def _install_state(patch, rows, layouts):
     return report
 
 
-def _clone_scalar(patch, style, main_helper):
+def _clone_scalar(patch, style, main_helper, *, native_layout=None):
     """Generate or relocate native scalar closures using the supplied base.
 
     Each field occupies 0x8e0 bytes. The only embedded data are the four-entry
@@ -220,10 +233,12 @@ def _clone_scalar(patch, style, main_helper):
     """
     origin = (BASE + len(patch.image) + 15) & ~15
     size = SCALAR_FIELD_BYTES * 9
-    if getattr(patch, "official_base", False):
+    getters = tuple((native_layout or {}).get('getters', GETTERS))
+    setters = tuple((native_layout or {}).get('setters', SETTERS))
+    if native_layout is not None or getattr(patch, "official_base", False):
         from .official_scalar import generate_scalar_template
         start = origin
-        source = generate_scalar_template(patch, start=start)
+        source = generate_scalar_template(patch, start=start, native_layout=native_layout)
     else:
         start = SCALAR_TEMPLATE
         source = _read(patch.image, start, size)
@@ -265,7 +280,7 @@ def _clone_scalar(patch, style, main_helper):
         # New dispatch falls through to the full previous registry, rather
         # than skipping its style35 node and reaching the first style34 node.
         for kind, entry, dispatch_offset, fallback_offset in (
-            ("setter", SETTERS[field], 0x850, 64), ("getter", GETTERS[field], 0x8A0, 44)):
+            ("setter", setters[field], 0x850, 64), ("getter", getters[field], 0x8A0, 44)):
             at = origin + field_start + dispatch_offset + fallback_offset
             previous = _target(entry, patch.word(entry))
             struct.pack_into("<I", blob, field_start + dispatch_offset + fallback_offset, _branch(at, previous))
@@ -293,7 +308,7 @@ def _clone_scalar(patch, style, main_helper):
                     0xE8BD400E, 0xE280C000 | (36 + field * 4),
                     0xE7DC0002, 0xE2200004, 0xE12FFF1E]
         stub = patch.append(dynamic_getter, 16)
-        patch.set_word(GETTERS[field], _branch(GETTERS[field], stub), "heap getter style%d field%d" % (style, field))
+        patch.set_word(getters[field], _branch(getters[field], stub), "heap getter style%d field%d" % (style, field))
     return {"style_id": style, "address": hex(origin), "bytes": size,
             "sha256": sha(blob), "storage": "dynamic RAW owner heap",
             "native_closure_mutator_and_notification_preserved": True,

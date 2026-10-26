@@ -49,7 +49,7 @@ def _native_clone(image, old_start, old_end, new_start, overrides):
     return words
 
 
-def generate_scalar_template(patch, *, start, style=35, main=0x55088604) -> bytes:
+def generate_scalar_template(patch, *, start, style=35, main=0x55088604, native_layout=None) -> bytes:
     """Return 9 × 0x8e0 bytes with the native scalar group/dispatch layout.
 
     Per field: four 0x210 groups, setter table at +0x840, setter dispatch at
@@ -61,6 +61,23 @@ def generate_scalar_template(patch, *, start, style=35, main=0x55088604) -> byte
         raise ValueError('标量模板样式或起始地址无效')
     blob = bytearray(FIELD_BYTES * 9)
     mirror = main + 36
+    layout = native_layout or {}
+    getters = tuple(layout.get('getters', GETTERS))
+    setters = tuple(layout.get('setters', SETTERS))
+    property_setters = tuple(layout.get('property_setters', PROPERTY_SETTERS))
+    if any(len(values) != 9 for values in (getters, setters, property_setters)):
+        raise ValueError('native scalar layout must bind all nine fields')
+    app_get = layout.get('app_get', 0x5323EA84)
+    userdata_get = layout.get('userdata_get', 0x5323F018)
+    node_get = layout.get('node_get', 0x5372B620)
+    still_movie = layout.get('still_movie', 0xB1E)
+    selector = layout.get('photo_selector', 0xC3E)
+    styles = layout.get('photo_styles', 0xC3F)
+    mutator_start = layout.get('mutator_start', 0x532B74E8)
+    wrapper_start = layout.get('wrapper_start', 0x532B75BC)
+    wrapper_end = layout.get('wrapper_end', 0x532B7674)
+    if wrapper_start - mutator_start != 0xD4 or wrapper_end - wrapper_start != 0xB8:
+        raise ValueError('native scalar closure sizes differ from the validated template')
 
     def write(at, words):
         data = struct.pack('<%dI' % len(words), *words)
@@ -80,29 +97,29 @@ def generate_scalar_template(patch, *, start, style=35, main=0x55088604) -> byte
                 0xE92D4070, 0xE1A04000,
                 0xE5D43000 | index, 0xE5D42000 | (36 + index), 0xE1520003,
                 0x15C43000 | (36 + index),
-                _branch(callback + 24, 0x5323EA84, link=True),
-                _branch(callback + 28, 0x5323F018, link=True),
-                0xE5D03B1E, 0xE3530000, 0,
-                0xE5D03C3E, 0xE3530000 | group, 0,
-                0xE5D03000 | (0xC3F + group), 0xE3530000 | style, 0,
-                _branch(callback + 68, 0x5372B620, link=True), 0xE5900004,
+                _branch(callback + 24, app_get, link=True),
+                _branch(callback + 28, userdata_get, link=True),
+                0xE5D03000 | still_movie, 0xE3530000, 0,
+                0xE5D03000 | selector, 0xE3530000 | group, 0,
+                0xE5D03000 | (styles + group), 0xE3530000 | style, 0,
+                _branch(callback + 68, node_get, link=True), 0xE5900004,
                 0xE5D41000 | (36 + index), 0xE2211004, 0xE8BD4070,
-                _branch(callback + 88, PROPERTY_SETTERS[field]), 0xE8BD8070,
+                _branch(callback + 88, property_setters[field]), 0xE8BD8070,
             ]
             for pos in (10, 13, 16):
                 words[pos] = _branch(callback + pos * 4, callback + 92, condition=1)
             write(callback, words)
-            write(mutator_body, _native_clone(patch.image, 0x532B74E8, 0x532B75BC,
-                  mutator_body, {0x532B7500: 0xE5D00000 | index,
-                                 0x532B751C: 0xE5C51000 | index,
-                                 0x532B7534: _mov(2, callback & 65535),
-                                 0x532B7538: _mov(2, callback >> 16, high=True),
-                                 0x532B75A8: 0xE5D53000 | (36 + index)}))
+            write(mutator_body, _native_clone(patch.image, mutator_start, wrapper_start,
+                  mutator_body, {mutator_start + 0x18: 0xE5D00000 | index,
+                                 mutator_start + 0x34: 0xE5C51000 | index,
+                                 mutator_start + 0x4C: _mov(2, callback & 65535),
+                                 mutator_start + 0x50: _mov(2, callback >> 16, high=True),
+                                 mutator_start + 0xC0: 0xE5D53000 | (36 + index)}))
             write(mutator, [0xE2211004, _mov(0, main & 65535),
                             _mov(0, main >> 16, high=True),
                             _branch(mutator + 12, mutator_body)])
-            write(wrapper, _native_clone(patch.image, 0x532B75BC, 0x532B7674,
-                  wrapper, {0x532B75F4: _branch(wrapper + 0x38, mutator, link=True)}))
+            write(wrapper, _native_clone(patch.image, wrapper_start, wrapper_end,
+                  wrapper, {wrapper_start + 0x38: _branch(wrapper + 0x38, mutator, link=True)}))
             wrappers.append(wrapper)
 
         table, setter_at, getter_at = field_start + 0x840, field_start + 0x850, field_start + 0x8A0
@@ -110,18 +127,18 @@ def generate_scalar_template(patch, *, start, style=35, main=0x55088604) -> byte
         setter = [
             0xE3530000 | style, 0, 0xE3510000, 0, 0xE3520003, 0,
             0xE92D4070, 0xE1A05002,
-            _branch(setter_at + 32, 0x5323EA84, link=True),
-            _branch(setter_at + 36, 0x5323F018, link=True),
+            _branch(setter_at + 32, app_get, link=True),
+            _branch(setter_at + 36, userdata_get, link=True),
             0xE59D1010, _mov(12, table & 65535), _mov(12, table >> 16, high=True),
             0xE79CC105, 0xE12FFF3C, 0xE8BD8070,
-            0xE1A0C00D, _branch(setter_at + 68, SETTERS[field] + 4),
+            0xE1A0C00D, _branch(setter_at + 68, setters[field] + 4),
         ]
         getter = [
             0xE3530000 | style, 0, 0xE3510000, 0, 0xE3520003, 0,
             _mov(12, (mirror + field * 4) & 65535),
             _mov(12, (mirror + field * 4) >> 16, high=True),
             0xE7DC0002, 0xE2200004, 0xE12FFF1E,
-            0xE1A0C00D, _branch(getter_at + 48, GETTERS[field] + 4),
+            0xE1A0C00D, _branch(getter_at + 48, getters[field] + 4),
         ]
         for pos, condition in ((1, 1), (3, 1), (5, 8)):
             setter[pos] = _branch(setter_at + pos * 4, setter_at + 64, condition=condition)
